@@ -99,13 +99,13 @@ class OllamaProvider extends LlmProvider with ChangeNotifier {
           if (message.attachments.isEmpty) {
             return Message(
               role: MessageRole.user,
-              content: message.text ?? '',
+              content: message.text,
             );
           }
 
           return Message(
             role: MessageRole.user,
-            content: message.text ?? '',
+            content: message.text,
             images: [
               for (final attachment in message.attachments)
                 if (attachment is ImageFileAttachment)
@@ -122,7 +122,7 @@ class OllamaProvider extends LlmProvider with ChangeNotifier {
         case MessageOrigin.llm:
           return Message(
             role: MessageRole.assistant,
-            content: message.text ?? '',
+            content: message.text,
           );
       }
     }).toList(growable: false);

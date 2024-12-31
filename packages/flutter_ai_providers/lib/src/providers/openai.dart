@@ -111,12 +111,12 @@ class OpenAIProvider extends LlmProvider with ChangeNotifier {
           if (message.attachments.isEmpty) {
             return ChatCompletionMessage.user(
               content:
-                  ChatCompletionUserMessageContent.string(message.text ?? ''),
+                  ChatCompletionUserMessageContent.string(message.text),
             );
           }
 
           final parts = [
-            ChatCompletionMessageContentPart.text(text: message.text ?? ''),
+            ChatCompletionMessageContentPart.text(text: message.text),
             for (final attachment in message.attachments)
               if (attachment is ImageFileAttachment)
                 ChatCompletionMessageContentPart.image(
@@ -135,7 +135,7 @@ class OpenAIProvider extends LlmProvider with ChangeNotifier {
           );
         case MessageOrigin.llm:
           return ChatCompletionMessage.assistant(
-            content: message.text ?? '',
+            content: message.text,
           );
       }
     }).toList(growable: false);

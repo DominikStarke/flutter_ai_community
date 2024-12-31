@@ -226,7 +226,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       })
       ..body = _OwuiChatRequest(
         model: _model,
-        messages: messages.where((m) => m.text != null).toList(),
+        messages: messages.where((m) => m.isInitialized()).toList(),
         files: _fileAttachments,
         images: _imageAttachments,
       ).toJsonString();
@@ -244,8 +244,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         final cleanedMessage = message.replaceFirst('data: ', '').trim();
         final chatResponse = _OwuiChatResponse.fromJsonString(cleanedMessage);
         for (var choice in chatResponse.choices) {
-          llmMessage.append(choice.message.text ?? '');
-          yield choice.message.text ?? '';
+          llmMessage.append(choice.message.text);
+          yield choice.message.text;
         }
       }
     } else {

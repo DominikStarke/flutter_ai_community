@@ -115,12 +115,12 @@ class AnthropicProvider extends LlmProvider with ChangeNotifier {
           if (message.attachments.isEmpty) {
             return Message(
               role: MessageRole.user,
-              content: MessageContent.text(message.text ?? ''),
+              content: MessageContent.text(message.text),
             );
           }
 
           final blocks = <Block>[
-            Block.text(text: message.text ?? ''),
+            Block.text(text: message.text),
             for (final attachment in message.attachments)
               if (attachment is ImageFileAttachment)
                 Block.image(
@@ -156,7 +156,7 @@ class AnthropicProvider extends LlmProvider with ChangeNotifier {
         case MessageOrigin.llm:
           return Message(
             role: MessageRole.assistant,
-            content: MessageContent.text(message.text ?? ''),
+            content: MessageContent.text(message.text),
           );
       }
     }).toList(growable: false);
