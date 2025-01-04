@@ -573,9 +573,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
     notifyListeners();
 
-    await Future.wait(owuiFileUploads);
-
-    notifyListeners();
+    if (owuiFileUploads.isNotEmpty) {
+      await Future.wait(owuiFileUploads);
+      notifyListeners();
+    }
 
     final response = await http.post(
       Uri.parse('$_host/v1/chats/new'),
