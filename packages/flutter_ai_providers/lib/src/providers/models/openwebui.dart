@@ -407,49 +407,55 @@ class OwuiChat {
 class OwuiChatMessage extends ChatMessage {
   final String id;
   final String? parentId;
-  late final List<String> childrenIds; // MEH
+  final List<String> childrenIds;
   final DateTime timestamp;
   final List<String>? models;
   final String? model;
   final int? modelIdx;
   final String? modelName;
-  bool? done;
   final List<OwuiFileAttachment> files;
+  final OwuiMergedResponse? merged;
+  bool? done; // meh
 
   OwuiChatMessage({
     String? id,
     this.parentId,
-    this.childrenIds = const [],
+    List<String>? childrenIds,
     required super.origin,
     super.text,
     DateTime? timestamp,
-    super.attachments = const [],
+    Iterable<Attachment>? attachments,
     this.models,
     this.model,
     this.modelIdx,
     this.modelName,
-    this.files = const [],
-    this.done
-  }): id = id ?? UuidV4().generate(), timestamp = timestamp ?? DateTime.now();
+    List<OwuiFileAttachment>? files,
+    this.done,
+    this.merged,
+  }): id = id ?? UuidV4().generate(),
+      timestamp = timestamp ?? DateTime.now(),
+      files = files ?? [], // Non const
+      childrenIds = childrenIds ?? [], // Non const
+      super(
+        attachments: attachments ?? [] // Non const
+      );
 
   factory OwuiChatMessage.llm({
     String? parentId,
     String? model,
     int? modelIdx,
     String? modelName,
-    bool done = false
+    bool done = false,
+    OwuiMergedResponse? merged,
   }) {
     return OwuiChatMessage(
       parentId: parentId,
-      childrenIds: [],
       origin: MessageOrigin.llm,
-      text: null,
-      timestamp: DateTime.now(),
-      models: null,
       model: model,
       modelIdx: modelIdx,
       modelName: modelName,
       done: done,
+      merged: merged,
     );
   }
 
@@ -462,25 +468,17 @@ class OwuiChatMessage extends ChatMessage {
     return OwuiChatMessage(
       parentId: parentId,
       attachments: attachments,
-      childrenIds: [],
       origin: MessageOrigin.user,
       text: text,
       files: files,
-      timestamp: DateTime.now(),
       models: models,
-      model: null,
     );
   }
 
   factory OwuiChatMessage.fromJson(Map<String, dynamic>? json) {
     if (json == null) {
       return OwuiChatMessage(
-        parentId: null,
-        childrenIds: [],
         origin: MessageOrigin.user,
-        text: null,
-        timestamp: DateTime.now(),
-        models: null,
       );
     }
 
@@ -514,6 +512,7 @@ class OwuiChatMessage extends ChatMessage {
       model: json['model'],
       modelIdx: json['modelIdx'],
       modelName: json['modelName'],
+      merged: json['merged'] != null ? OwuiMergedResponse.fromJson(json['merged']) : null,
     );
   }
 
@@ -527,6 +526,7 @@ class OwuiChatMessage extends ChatMessage {
       'content': text,
       'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
       'files': files.map((file) => file.toJson()).toList(),
+      if(merged != null) 'merged': merged!.toJson(),
       if(model != null) 'model': model,
       if(models != null) 'models': models,
       if(modelIdx != null) 'modelIdx': modelIdx,
@@ -547,6 +547,30 @@ class OwuiChatMessage extends ChatMessage {
     return {
       'role': origin == MessageOrigin.user ? 'user' : 'assistant',
       'content': text,
+    };
+  }
+}
+
+class OwuiMergedResponse {
+  final bool status;
+  final String content;
+
+  OwuiMergedResponse({
+    required this.status,
+    required this.content,
+  });
+
+  factory OwuiMergedResponse.fromJson(Map<String, dynamic> json) {
+    return OwuiMergedResponse(
+      status: json['status'],
+      content: json['content'],
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'status': status,
+      'content': content,
     };
   }
 }

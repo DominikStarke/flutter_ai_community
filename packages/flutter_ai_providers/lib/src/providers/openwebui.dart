@@ -7,8 +7,6 @@ import 'package:flutter_ai_toolkit/flutter_ai_toolkit.dart';
 import 'package:http/http.dart' as http;
 import 'dart:io' show WebSocket;
 
-import 'package:uuid/v4.dart';
-import 'package:collection/collection.dart'; // Add this import for firstWhereOrNull
 import 'models/openwebui.dart';
  import 'package:http_parser/http_parser.dart';
 
