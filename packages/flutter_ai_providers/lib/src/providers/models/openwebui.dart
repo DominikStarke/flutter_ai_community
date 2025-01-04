@@ -318,7 +318,7 @@ class OwuiChat {
   String historyCurrentId; // also meh
   final Map<String, OwuiChatMessage> history;
   final List<String>? models;
-  final List<OwuiFileAttachment>? historyFiles;
+  final List<OwuiFileAttachment> historyFiles;
 
   OwuiChat({
     this.id,
@@ -332,13 +332,37 @@ class OwuiChat {
     this.pinned = false,
     this.meta = const {},
     this.folderId,
-    this.history = const {},
-    this.historyFiles = const [],
-    required this.historyCurrentId,
+    Map<String, OwuiChatMessage>? history,
+    List<OwuiFileAttachment>? historyFiles,
+    this.historyCurrentId = "",
     this.models,
   }) : 
+    history = history ?? {}, // non-const
+    historyFiles = historyFiles ?? [], // non-const
     createdAt = createdAt ?? DateTime.now(),
     updatedAt = updatedAt ?? DateTime.now();
+
+  List<OwuiChatMessage> get messages {
+    List<OwuiChatMessage> orderedMessages = [];
+    OwuiChatMessage? currentMessage = history[historyCurrentId];
+
+    while (currentMessage != null) {
+      orderedMessages.add(currentMessage);
+      currentMessage = history[currentMessage.parentId];
+    }
+
+    return orderedMessages.reversed.toList();
+  }
+
+  OwuiChatMessage? get tail {
+    return messages.isNotEmpty ? messages.last : null;
+  }
+
+  void appendMessage (OwuiChatMessage message) {
+    tail?.childrenIds.add(message.id);
+    history[message.id] = message;
+    historyCurrentId = message.id;
+  }
 
   factory OwuiChat.fromJson(Map<String, dynamic> json, {List<String>? models}) {
     return OwuiChat(
@@ -364,24 +388,12 @@ class OwuiChat {
     );
   }
 
-  List<OwuiChatMessage> get messages {
-    List<OwuiChatMessage> orderedMessages = [];
-    OwuiChatMessage? currentMessage = history[historyCurrentId];
-
-    while (currentMessage != null) {
-      orderedMessages.add(currentMessage);
-      currentMessage = history[currentMessage.parentId];
-    }
-
-    return orderedMessages.reversed.toList();
-  }
-
   Map<String, dynamic> toJson({List<String>? models}) {
     return {
       'chat' : {
         'params': {},
         'models': models ?? this.models ?? [],
-        'files': historyFiles?.map((file) => file.toJson()).toList(),
+        'files': historyFiles.map((file) => file.toJson()).toList(),
         'history': {
           'currentId': historyCurrentId,
           'messages': history.map((id, message) => MapEntry(id, message.toJson())),

@@ -252,17 +252,18 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     __jsonLog(messageStatusData ?? {}, tag: "CHAT CITATIONS CHANGED");
   }
 
-  Stream<String> _generateStream (OwuiChatMessage llmMessage) async* {
+  Stream<String> _generateStream () async* {
     _responseStream = StreamController<String>.broadcast();
+    final llmMessage = _chat?.tail;
     final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
     final body = OwuiCompletionRequest(
-      model: llmMessage.model ?? "",
+      model: llmMessage?.model ?? "",
       toolIds: [
         'web_search'
       ],
       chatId: _chat?.id,
       messages: reqMessages,
-      id: llmMessage.id,
+      id: llmMessage?.id,
       sessionId: _sessionId,
       backgroundTasks: {
         if (reqMessages.length == 1) 'tags_generation': true,
@@ -362,8 +363,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   Future<OwuiChat> _saveChat () async {
-    _chat?.historyCurrentId = history.last.id;
-
     final body = _chat?.toJson(models: modelSelection) ?? {};
     final response = await http.post(
       Uri.parse('$_host/v1/chats/${_chat?.id}'),
@@ -378,7 +377,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     if (response.statusCode == 200) {
       final jsonResponse = json.decode(response.body);
       __jsonLog(jsonResponse, tag: "SAVE CHAT RESPONSE");
-      _chat = OwuiChat.fromJson(jsonResponse);
+      _chat = OwuiChat.fromJson(jsonResponse); // Avoid side effect?
       return _chat!;
     } else {
       throw Exception('Failed to save chat: ${response.reasonPhrase}');
@@ -485,7 +484,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       );
       userMessage.childrenIds.add(llmMessage.id);
       // TODO: Make multi chats actually work
-      yield* _generateStream(llmMessage);
+      yield* _generateStream();
     }
   }
 
@@ -499,46 +498,36 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         attachments: attachments,
         models: modelSelection
       );
-      final llmMessage = await createChat([userMessage]);
+      await createChat([userMessage]);
       await _saveChat();
+
       notifyListeners();
 
-      yield* _generateStream(llmMessage);
+      yield* _generateStream();
     } else {
       List<OwuiFileAttachment> files = [];
       for(final attachment in attachments) {
        files.add(await _handleAttachment(attachment));
       }
 
-      final userMessage = OwuiChatMessage.user(prompt,
+      _chat?.appendMessage(OwuiChatMessage.user(prompt,
         attachments: attachments,
         models: modelSelection,
         files: files,
-        parentId: _chat?.history[_chat?.historyCurrentId]?.id
-      );
-
-      _chat?.history.addAll({
-        userMessage.id: userMessage,
-      });
+        parentId: _chat?.tail?.id
+      ));
 
       for (final model in modelSelection) {
-        final llmMessage = OwuiChatMessage.llm(
-          parentId: userMessage.id,
+        _chat?.appendMessage(OwuiChatMessage.llm(
+          parentId: _chat?.tail?.id,
           model: model,
           modelIdx: modelSelection.indexOf(model),
           modelName: model
-        );
-
-        userMessage.childrenIds.add(llmMessage.id);
-        
-        _chat?.history.addAll({
-          llmMessage.id: llmMessage,
-        });
-        _chat?.historyCurrentId = llmMessage.id;
+        ));
         
         notifyListeners();
         
-        yield* _generateStream(llmMessage);
+        yield* _generateStream();
       }
     }
 
@@ -547,47 +536,34 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     await _saveChat();
   }
 
-  Future<OwuiChatMessage> createChat (Iterable<ChatMessage> messages) async {
+  Future<void> createChat (Iterable<ChatMessage> messages) async {
     await _configure();
 
-    final List<OwuiChatMessage> owuiMessages = [];
-    final List<Future<OwuiFileAttachment>> owuiFileUploads = [];
-    final List<OwuiFileAttachment> allOwuiFiles = [];
+    final List<Future> owuiFileUploads = [];
 
-    String? nextParentId;
-    String nextMessageId = UuidV4().generate();
+    _chat = OwuiChat(
+      models: modelSelection,
+    );
 
     for(final message in messages) {
-      final messageId = nextMessageId;
-      nextMessageId = UuidV4().generate();
-
-      final parentId = nextParentId;
-      nextParentId = messageId;
-
       final List<OwuiFileAttachment> owuiMessageFiles = [];
       if(message.attachments.isNotEmpty) {
         for (final attachment in message.attachments) {
           owuiFileUploads.add(Future(() async {
             final owuiAttachment = await _handleAttachment(attachment);
             owuiMessageFiles.add(owuiAttachment);
-            allOwuiFiles.add(owuiAttachment);
-            return await _handleAttachment(attachment);
+            _chat?.historyFiles.add(owuiAttachment);
+
           }));
         }
       }
 
-      owuiMessages.add(OwuiChatMessage(
+      _chat?.appendMessage(OwuiChatMessage(
         origin: message.origin,
         text: message.text,
         timestamp: DateTime.now(),
-        childrenIds: [
-          if(message != messages.last)
-            nextMessageId
-        ],
         attachments: message.attachments,
         files: owuiMessageFiles,
-        parentId: parentId,
-        id: messageId,
         models: modelSelection,
         model: message.origin == MessageOrigin.user ? null : modelSelection.first,
         modelIdx: message.origin == MessageOrigin.user ? null :  0,
@@ -595,20 +571,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       ));
     }
 
-    _chat = OwuiChat(
-      historyCurrentId: owuiMessages.last.id,
-      models: modelSelection,
-      historyFiles: allOwuiFiles,
-      id: "",
-      history: {
-        for(final message in owuiMessages)
-          message.id: message
-      },
-    );
-
     notifyListeners();
 
-    allOwuiFiles.addAll(await Future.wait(owuiFileUploads));
+    await Future.wait(owuiFileUploads);
 
     notifyListeners();
 
@@ -623,7 +588,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final chat = OwuiChat.fromJson(json.decode(response.body), models: modelSelection); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
+      final jsonResponse = json.decode(response.body);
+      __jsonLog(jsonResponse, tag: "CREATE CHAT RESPONSE");
+      final chat = OwuiChat.fromJson(jsonResponse, models: modelSelection); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
       _chat = chat;
 
       // Register callbacks for this chat.
@@ -633,20 +600,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         "chat_id": chat.id,
       }])}");
       
-      final userMessage = chat.history[chat.historyCurrentId];
-      final llmMessage = OwuiChatMessage.llm(
-        parentId: userMessage?.id,
+      chat.appendMessage(OwuiChatMessage.llm(
+        parentId: chat.tail?.id,
         model: modelSelection.first,
         modelIdx: 0,
         modelName: modelSelection.first
-      );
-      userMessage?.childrenIds.add(llmMessage.id);
-      chat.history.addAll({
-        llmMessage.id : llmMessage,
-      });
-      chat.historyCurrentId = llmMessage.id;
-
-      return llmMessage;
+      ));
     } else {
       throw Exception('Failed to create chat: ${response.reasonPhrase}');
     }
@@ -704,9 +663,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   Iterable<OwuiChatMessage> get history => _chat?.messages ?? []; // List.from(_chat?.messages ?? []);
 
   @override
-  set history(Iterable<ChatMessage> history) {
+  set history(Iterable<ChatMessage> newHistory) {
     // ARGH
-    
+    final currentBranch = _chat?.messages;
+    final branchFromChild = currentBranch?.toList()[history.length - 2];
+    final branchOnParent = _chat?.history[branchFromChild?.parentId];
+
     throw("Setting history is not supported for OpenWebUIProvider. Use [loadChat] and [createChat] instead.");
   }
 }
