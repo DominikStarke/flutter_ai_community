@@ -329,7 +329,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   Stream<String> _generateStream (OwuiChatMessage llmMessage) async* {
     _responseStream = StreamController<String>.broadcast();
-    final reqMessages = _chat?.messages.where((m) => m.isInitialized()).toList() ?? [];
+    final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
     final body = OwuiCompletionRequest(
       model: llmMessage.model ?? "",
       toolIds: [
