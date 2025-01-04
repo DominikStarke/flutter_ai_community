@@ -45,10 +45,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   { _run(); }
 
   void _run () async {
+    await _startSocket();
+    await _loadChatList();
     await _loadSettings();
     await _loadModels();
-    await _loadChatList();
-    await _startSocket();
     notifyListeners();
   }
 
@@ -57,8 +57,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   List<String> get models => List.from(_models?.models.map((model) => model.name) ?? []);
   List<String> get modelSelection {
+    final _settingsModels = _settings?.ui.models;
+
     if(_modelSelection == null && models.isNotEmpty) {
-      return [models.first];
+      return _settingsModels ?? [models.first];
     } else if(_modelSelection == null && models.isEmpty) {
       return [];
     } else {
@@ -642,7 +644,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       __jsonLog(jsonResponse, tag: "SETTINGS");
       
     } else {
-      throw Exception('Failed to load models: ${response.reasonPhrase}');
+      throw Exception('Failed to load settings: ${response.reasonPhrase}');
     }
   }
 
