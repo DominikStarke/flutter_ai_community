@@ -10,9 +10,10 @@ import 'dart:io' show WebSocket;
 import 'package:uuid/v4.dart';
 import 'package:collection/collection.dart'; // Add this import for firstWhereOrNull
 import 'models/openwebui.dart';
+ import 'package:http_parser/http_parser.dart';
+
 
 export 'models/openwebui.dart';
-
 /// A provider for [open-webui](https://openwebui.com/)
 /// Use open-webui as unified chat provider.
 class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
@@ -45,10 +46,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   { _run(); }
 
   void _run () async {
+    await _configure();
     await _startSocket();
     await _loadChatList();
-    await _loadSettings();
-    await _loadModels();
     notifyListeners();
   }
 
@@ -57,10 +57,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   List<String> get models => List.from(_models?.models.map((model) => model.name) ?? []);
   List<String> get modelSelection {
-    final _settingsModels = _settings?.ui.models;
+    final settingsModels = _settings?.ui.models;
 
     if(_modelSelection == null && models.isNotEmpty) {
-      return _settingsModels ?? [models.first];
+      return settingsModels ?? [models.first];
     } else if(_modelSelection == null && models.isEmpty) {
       return [];
     } else {
@@ -107,6 +107,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   Future<void> _startSocket () async {
+    
+
     final baseUri = Uri.parse(_host);
     final wsUrl = Uri.parse('ws://${baseUri.host}:${baseUri.port}/ws/socket.io/?EIO=4&transport=websocket');
 
@@ -235,6 +237,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     final messageStatusData = chatEvent["data"]?["data"];
     final messageId = chatEvent["data"]?["message_id"] as String?;
     final status = OwuiStatusHistoryEntry.fromJson(messageStatusData ?? {});
+
+    // TODO: Handle status changes
     __jsonLog(messageStatusData ?? {}, tag: "CHAT STATUS CHANGED");
   }
 
@@ -243,8 +247,224 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     final messageStatusData = chatEvent["data"]?["data"];
     final messageId = chatEvent["data"]?["message_id"] as String?;
     final citation = OwuiCitationData.fromJson(messageStatusData ?? {});
+
+    // TODO: Handle citation changes
     __jsonLog(messageStatusData ?? {}, tag: "CHAT CITATIONS CHANGED");
   }
+
+  Stream<String> _generateStream (OwuiChatMessage llmMessage) async* {
+    _responseStream = StreamController<String>.broadcast();
+    final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
+    final body = OwuiCompletionRequest(
+      model: llmMessage.model ?? "",
+      toolIds: [
+        'web_search'
+      ],
+      chatId: _chat?.id,
+      messages: reqMessages,
+      id: llmMessage.id,
+      sessionId: _sessionId,
+      backgroundTasks: {
+        if (reqMessages.length == 1) 'tags_generation': true,
+        if (reqMessages.length == 1) 'title_generation': true,
+      },
+    ).toJson();
+
+    __jsonLog(body, tag: "COMPLETION REQUEST");
+
+    final httpRequest = http.Request('POST', Uri.parse("$_host/chat/completions"))
+      ..headers.addAll({
+        if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+      })
+      ..body = jsonEncode(body);
+
+    http.Client().send(httpRequest) // Cannot await this, otherwise we'll miss the first chunk of the response on the socket...
+      .then((response) async {
+        final jsonResponse = json.decode(await response.stream.bytesToString());
+        __jsonLog(jsonResponse, tag: "COMPLETION RESPONSE");
+      });
+
+    await for (final message in _responseStream?.stream ?? Stream.empty()) {
+      _chat?.history[_chat?.historyCurrentId]?.append(message);
+      yield message;
+    }
+  }
+
+  Future<OwuiFileAttachment> _handleAttachment (Attachment attachment) async {
+    if(attachment is ImageFileAttachment) {
+      _imageAttachments.clear(); // Only one image can be attached at a time? At least with llama3.2-vision + ollama.
+      _imageAttachments.add(OwuiImageAttachment.fromImageAttachment(attachment));
+      throw Exception('Image attachments are not supported yet.');
+    } else if(attachment is FileAttachment) {
+
+      final uri = Uri.parse('$_host/v1/files/'); // Replace with your OpenWebUI endpoint
+      final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll({
+          if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+          'Content-Type': 'multipart/form-data',
+          'Accept': 'application/json',
+        })
+        ..files.add(http.MultipartFile.fromBytes('file', attachment.bytes, filename: attachment.name, contentType: MediaType.parse(attachment.mimeType)));
+
+      final response = await request.send();
+      
+      if (response.statusCode == 200) {
+        final responseBody = json.decode(await response.stream.bytesToString());
+        __jsonLog(responseBody, tag: "FILE UPLOAD RESPONSE");
+        return OwuiFileAttachment.fromJson(responseBody);
+      } else {
+        throw Exception('Failed to upload file: ${response.reasonPhrase}');
+      }
+    }
+    throw Exception('Unsupported FileAttachment type: $attachment');
+  }
+
+  Future<void> _loadChatList () async {
+    final response = await http.get(
+      Uri.parse('$_host/v1/chats/list'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final responseBody = json.decode(response.body);
+      __jsonLog(responseBody, tag: "LOAD CHAT LIST RESPONSE");
+      final chatList = OwuiChatList.fromJson(responseBody);
+      // Sort the chat list by the newest
+      chatList.chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+      chatListNotifier.value = chatList.chats;
+      _chats = chatList;
+    } else {
+      throw Exception('Failed to load chats: ${response.reasonPhrase}');
+    }
+  }
+
+  Future<List<OwuiChatListEntry>> listChatsPage (int page) async {
+    final response = await http.get(
+      Uri.parse('$_host/v1/chats/?page=$page'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Accept': 'application/json',
+      }
+    );
+
+    if(response.statusCode == 200) {
+      final responseBody = json.decode(response.body);
+      __debugLog(responseBody, tag: "LIST CHAT PAGE $page");
+      return OwuiChatList.fromJson(responseBody).chats;
+    } else {
+      throw Exception('Failed to poll name: ${response.reasonPhrase}');
+    }
+  }
+
+  Future<OwuiChat> _saveChat () async {
+    _chat?.historyCurrentId = history.last.id;
+
+    final body = _chat?.toJson(models: modelSelection) ?? {};
+    final response = await http.post(
+      Uri.parse('$_host/v1/chats/${_chat?.id}'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode == 200) {
+      final jsonResponse = json.decode(response.body);
+      __jsonLog(jsonResponse, tag: "SAVE CHAT RESPONSE");
+      _chat = OwuiChat.fromJson(jsonResponse);
+      return _chat!;
+    } else {
+      throw Exception('Failed to save chat: ${response.reasonPhrase}');
+    }
+  }
+
+  Future<void> _completeMessage() async {
+    final llmMessage = _chat?.history[_chat?.historyCurrentId];
+    llmMessage?.done = true;
+
+    final body = {
+      'model': llmMessage?.model ?? "",
+      'messages': _chat?.messages.map((message) => message.toCompletedJson()).toList(),
+      'chat_id': _chat?.id,
+      'session_id': _sessionId,
+      'id': llmMessage?.id,
+    };
+
+    final response = await http.post(
+      Uri.parse('$_host/chat/completed'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode == 200) {
+      // history.last.done = true;
+    } else {
+      throw Exception('Failed to complete chat: ${response.reasonPhrase}');
+    }
+  }
+
+  Future<void> _configure () async {
+    if(_settings == null) {
+      await _loadSettings();
+    }
+
+    if(_models == null) {
+      await _loadModels();
+    }
+  }
+
+  Future<void> _loadSettings() async {
+    final response = await http.get(
+      Uri.parse('$_host/v1/users/user/settings'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final jsonResponse = json.decode(response.body);
+      _settings = OwuiSettings.fromJson(jsonResponse);
+      __jsonLog(jsonResponse, tag: "SETTINGS");
+      
+    } else {
+      throw Exception('Failed to load settings: ${response.reasonPhrase}');
+    }
+  }
+
+  Future<void> _loadModels() async {
+    final response = await http.get(
+      Uri.parse('$_host/models'),
+      headers: {
+        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final jsonResponse = json.decode(response.body);
+      __jsonLog(jsonResponse, tag: "MODELS");
+      _models = OwuiLlmModelList.fromJson(jsonResponse);
+    } else {
+      throw Exception('Failed to load models: ${response.reasonPhrase}');
+    }
+  }
+
+  /// ******
+  /// PUBLIC 
+  /// ******
+
 
   @override
   Stream<String> generateStream(
@@ -327,168 +547,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     await _saveChat();
   }
 
-  Stream<String> _generateStream (OwuiChatMessage llmMessage) async* {
-    _responseStream = StreamController<String>.broadcast();
-    final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
-    final body = OwuiCompletionRequest(
-      model: llmMessage.model ?? "",
-      toolIds: [
-        'web_search'
-      ],
-      chatId: _chat?.id,
-      messages: reqMessages,
-      id: llmMessage.id,
-      sessionId: _sessionId,
-      backgroundTasks: {
-        if (reqMessages.length == 1) 'tags_generation': true,
-        if (reqMessages.length == 1) 'title_generation': true,
-      },
-    ).toJson();
-
-    __jsonLog(body, tag: "COMPLETION REQUEST");
-
-    final httpRequest = http.Request('POST', Uri.parse("$_host/chat/completions"))
-      ..headers.addAll({
-        if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-      })
-      ..body = jsonEncode(body);
-
-    http.Client().send(httpRequest) // Cannot await this, otherwise we'll miss the first chunk of the response on the socket...
-      .then((response) async {
-        final jsonResponse = json.decode(await response.stream.bytesToString());
-        __jsonLog(jsonResponse, tag: "COMPLETION RESPONSE");
-      });
-
-    await for (final message in _responseStream?.stream ?? Stream.empty()) {
-      _chat?.history[_chat?.historyCurrentId]?.append(message);
-      yield message;
-    }
-  }
-
-  Future<OwuiFileAttachment> _handleAttachment (Attachment attachment) async {
-    if(attachment is ImageFileAttachment) {
-      _imageAttachments.clear(); // Only one image can be attached at a time? At least with llama3.2-vision + ollama.
-      _imageAttachments.add(OwuiImageAttachment.fromImageAttachment(attachment));
-      throw Exception('Image attachments are not supported yet.');
-    } else if(attachment is FileAttachment) {
-
-      final uri = Uri.parse('$_host/v1/files/'); // Replace with your OpenWebUI endpoint
-      final request = http.MultipartRequest('POST', uri)
-        ..headers.addAll({
-          if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-          'Content-Type': 'multipart/form-data',
-          'Accept': 'application/json',
-        })
-        ..files.add(http.MultipartFile.fromBytes('file', attachment.bytes, filename: attachment.name));
-
-      final response = await request.send();
-      
-      if (response.statusCode == 200) {
-        final responseBody = json.decode(await response.stream.bytesToString());
-        __jsonLog(responseBody, tag: "FILE UPLOAD RESPONSE");
-        return OwuiFileAttachment.fromJson(responseBody);
-      } else {
-        throw Exception('Failed to upload file: ${response.reasonPhrase}');
-      }
-    }
-    throw Exception('Unsupported FileAttachment type: $attachment');
-  }
-
-  Future<void> _loadChatList () async {
-    final response = await http.get(
-      Uri.parse('$_host/v1/chats/list'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final responseBody = json.decode(response.body);
-      __jsonLog(responseBody, tag: "LOAD CHAT LIST RESPONSE");
-      final chatList = OwuiChatList.fromJson(responseBody);
-      // Sort the chat list by the newest
-      chatList.chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-
-      chatListNotifier.value = chatList.chats;
-      _chats = chatList;
-    } else {
-      throw Exception('Failed to load chats: ${response.reasonPhrase}');
-    }
-  }
-
-  Future<List<OwuiChatListEntry>> listChatsPage (int page) async {
-    final response = await http.get(
-      Uri.parse('$_host/v1/chats/?page=$page'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Accept': 'application/json',
-      }
-    );
-
-    if(response.statusCode == 200) {
-      final responseBody = json.decode(response.body);
-      __debugLog(responseBody, tag: "LIST CHAT PAGE $page");
-      return OwuiChatList.fromJson(responseBody).chats;
-    } else {
-      throw Exception('Failed to poll name: ${response.reasonPhrase}');
-    }
-  }
-
-  Future<OwuiChat> loadChat (String chatId) async {
-    final response = await http.get(
-      Uri.parse('$_host/v1/chats/$chatId'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
-      __jsonLog(jsonResponse, tag: "LOAD CHAT RESPONSE");
-      _chat = OwuiChat.fromJson(jsonResponse);
-      _registerSocket();
-      notifyListeners();
-      return _chat!;
-    } else {
-      throw Exception('Failed to select chat: ${response.reasonPhrase}');
-    }
-  }
-
-  Future<OwuiChat> _saveChat () async {
-    _chat?.historyCurrentId = history.last.id;
-
-    final body = _chat?.toJson(models: modelSelection) ?? {};
-    final response = await http.post(
-      Uri.parse('$_host/v1/chats/${_chat?.id}'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
-      __jsonLog(jsonResponse, tag: "SAVE CHAT RESPONSE");
-      _chat = OwuiChat.fromJson(jsonResponse);
-      return _chat!;
-    } else {
-      throw Exception('Failed to save chat: ${response.reasonPhrase}');
-    }
-  }
-
   Future<OwuiChatMessage> createChat (Iterable<ChatMessage> messages) async {
-    if(_settings == null) {
-      await _loadSettings();
-    }
-
-    if(_models == null) {
-      await _loadModels();
-    }
+    await _configure();
 
     final List<OwuiChatMessage> owuiMessages = [];
     final List<Future<OwuiFileAttachment>> owuiFileUploads = [];
@@ -592,38 +652,26 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> _completeMessage() async {
-    final llmMessage = _chat?.history[_chat?.historyCurrentId];
-    llmMessage?.done = true;
-
-    final body = {
-      'model': llmMessage?.model ?? "",
-      'messages': _chat?.messages.map((message) => message.toCompletedJson()).toList(),
-      'chat_id': _chat?.id,
-      'session_id': _sessionId,
-      'id': llmMessage?.id,
-    };
-
-    final response = await http.post(
-      Uri.parse('$_host/chat/completed'),
+  Future<OwuiChat> loadChat (String chatId) async {
+    await _configure();
+    final response = await http.get(
+      Uri.parse('$_host/v1/chats/$chatId'),
       headers: {
         if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: jsonEncode(body),
     );
 
     if (response.statusCode == 200) {
-      // history.last.done = true;
+      final jsonResponse = json.decode(response.body);
+      __jsonLog(jsonResponse, tag: "LOAD CHAT RESPONSE");
+      _chat = OwuiChat.fromJson(jsonResponse);
+      _registerSocket();
+      notifyListeners();
+      return _chat!;
     } else {
-      throw Exception('Failed to complete chat: ${response.reasonPhrase}');
+      throw Exception('Failed to select chat: ${response.reasonPhrase}');
     }
-  }
-
-  void clearChat () {
-    _chat = null;
-    notifyListeners();
   }
 
   Future<void> deleteChat (String chatId) async {
@@ -645,42 +693,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> _loadSettings() async {
-    final response = await http.get(
-      Uri.parse('$_host/v1/users/user/settings'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
-      _settings = OwuiSettings.fromJson(jsonResponse);
-      __jsonLog(jsonResponse, tag: "SETTINGS");
-      
-    } else {
-      throw Exception('Failed to load settings: ${response.reasonPhrase}');
-    }
+  void clearChat () {
+    _chat = null;
+    notifyListeners();
   }
 
-  Future<void> _loadModels() async {
-    final response = await http.get(
-      Uri.parse('$_host/models'),
-      headers: {
-        if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Accept': 'application/json',
-      },
-    );
 
-    if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
-      __jsonLog(jsonResponse, tag: "MODELS");
-      _models = OwuiLlmModelList.fromJson(jsonResponse);
-    } else {
-      throw Exception('Failed to load models: ${response.reasonPhrase}');
-    }
-  }
 
   @override
   Iterable<OwuiChatMessage> get history => _chat?.messages ?? []; // List.from(_chat?.messages ?? []);
