@@ -410,7 +410,7 @@ class OwuiChatMessage extends ChatMessage {
     this.childrenIds = const [],
     required super.origin,
     super.text,
-    required this.timestamp,
+    DateTime? timestamp,
     super.attachments = const [],
     this.models,
     this.model,
@@ -418,7 +418,7 @@ class OwuiChatMessage extends ChatMessage {
     this.modelName,
     this.files = const [],
     this.done
-  }): id = id ?? UuidV4().generate();
+  }): id = id ?? UuidV4().generate(), timestamp = timestamp ?? DateTime.now();
 
   factory OwuiChatMessage.llm({
     String? parentId,

@@ -264,7 +264,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         modelName: model
       );
       userMessage.childrenIds.add(llmMessage.id);
-      // TODO: Make multi chats actuall work
+      // TODO: Make multi chats actually work
       yield* _generateStream(llmMessage);
     }
   }
@@ -481,9 +481,18 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<OwuiChatMessage> createChat (List<ChatMessage> messages) async {
+  Future<OwuiChatMessage> createChat (Iterable<ChatMessage> messages) async {
+    if(_settings == null) {
+      await _loadSettings();
+    }
+
+    if(_models == null) {
+      await _loadModels();
+    }
+
     final List<OwuiChatMessage> owuiMessages = [];
-    final List<OwuiFileAttachment> owuiFiles = [];
+    final List<Future<OwuiFileAttachment>> owuiFileUploads = [];
+    final List<OwuiFileAttachment> allOwuiFiles = [];
 
     String? nextParentId;
     String nextMessageId = UuidV4().generate();
@@ -495,12 +504,15 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final parentId = nextParentId;
       nextParentId = messageId;
 
-      final List<OwuiFileAttachment> files = [];
+      final List<OwuiFileAttachment> owuiMessageFiles = [];
       if(message.attachments.isNotEmpty) {
         for (final attachment in message.attachments) {
-          final owuiAttachment = await _handleAttachment(attachment);
-          files.add(owuiAttachment);
-          owuiFiles.add(owuiAttachment);
+          owuiFileUploads.add(Future(() async {
+            final owuiAttachment = await _handleAttachment(attachment);
+            owuiMessageFiles.add(owuiAttachment);
+            allOwuiFiles.add(owuiAttachment);
+            return await _handleAttachment(attachment);
+          }));
         }
       }
 
@@ -513,7 +525,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
             nextMessageId
         ],
         attachments: message.attachments,
-        files: files,
+        files: owuiMessageFiles,
         parentId: parentId,
         id: messageId,
         models: modelSelection,
@@ -526,13 +538,17 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     _chat = OwuiChat(
       historyCurrentId: owuiMessages.last.id,
       models: modelSelection,
-      historyFiles: owuiFiles,
+      historyFiles: allOwuiFiles,
       id: "",
       history: {
         for(final message in owuiMessages)
           message.id: message
       },
     );
+
+    notifyListeners();
+
+    allOwuiFiles.addAll(await Future.wait(owuiFileUploads));
 
     notifyListeners();
 
