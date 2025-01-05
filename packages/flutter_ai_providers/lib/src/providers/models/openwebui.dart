@@ -458,6 +458,8 @@ class OwuiChatMessage extends ChatMessage {
     bool done = false,
     OwuiMergedResponse? merged,
     String? text,
+    String? id,
+    List<String>? childrenIds,
   }) {
     return OwuiChatMessage(
       parentId: parentId,
@@ -468,6 +470,8 @@ class OwuiChatMessage extends ChatMessage {
       done: done,
       merged: merged,
       text: text,
+      id: id,
+      childrenIds: childrenIds,
     );
   }
 
@@ -575,7 +579,7 @@ class OwuiMergedResponse {
   factory OwuiMergedResponse.fromJson(Map<String, dynamic> json) {
     return OwuiMergedResponse(
       status: json['status'],
-      content: json['content'],
+      content: utf8.decode((json['content']?.runes ?? []).toList()),
     );
   }
 
@@ -959,3 +963,14 @@ class OwuiNotificationsSettings {
   }
 }
 
+class OwuiChatMessageChunk {
+  final String chunk;
+  final String messageId;
+  final bool done;
+
+  OwuiChatMessageChunk({
+    required this.chunk,
+    required this.messageId,
+    required this.done
+  });
+}
