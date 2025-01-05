@@ -494,41 +494,29 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     Iterable<Attachment> attachments = const [],
   }) async* {
     if(_chat == null) {
-      final userMessage = OwuiChatMessage.user(prompt,
+      await createChat([OwuiChatMessage.user(prompt,
         attachments: attachments,
         models: modelSelection
-      );
-      await createChat([userMessage]);
+      )]);
+
       await _saveChat();
 
       notifyListeners();
 
       yield* _generateStream();
     } else {
+
       List<OwuiFileAttachment> files = [];
       for(final attachment in attachments) {
        files.add(await _handleAttachment(attachment));
       }
 
-      _chat?.appendMessage(OwuiChatMessage.user(prompt,
+      yield* appendChat(OwuiChatMessage.user(prompt,
         attachments: attachments,
         models: modelSelection,
         files: files,
         parentId: _chat?.tail?.id
       ));
-
-      for (final model in modelSelection) {
-        _chat?.appendMessage(OwuiChatMessage.llm(
-          parentId: _chat?.tail?.id,
-          model: model,
-          modelIdx: modelSelection.indexOf(model),
-          modelName: model
-        ));
-        
-        notifyListeners();
-        
-        yield* _generateStream();
-      }
     }
 
     await _completeMessage();
@@ -611,6 +599,24 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     } else {
       throw Exception('Failed to create chat: ${response.reasonPhrase}');
     }
+  }
+
+  Stream<String> appendChat (OwuiChatMessage userMessage) async* {
+    _chat?.appendMessage(userMessage);
+
+    for (final model in modelSelection) {
+      _chat?.appendSibling(OwuiChatMessage.llm(
+        parentId: userMessage.id,
+        model: model,
+        modelIdx: modelSelection.indexOf(model),
+        modelName: model
+      ));
+      
+      notifyListeners();
+      
+      yield* _generateStream();
+    }
+    notifyListeners();
   }
 
   Future<OwuiChat> loadChat (String chatId) async {

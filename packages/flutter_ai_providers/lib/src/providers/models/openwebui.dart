@@ -364,6 +364,15 @@ class OwuiChat {
     historyCurrentId = message.id;
   }
 
+  void appendSibling (OwuiChatMessage message) {
+    history[message.id] = message;
+    final siblings = history[message.parentId]?.childrenIds;
+    if (siblings?.contains(message.id) != true) {
+      siblings?.add(message.id);
+    }
+    historyCurrentId = message.id;
+  }
+
   factory OwuiChat.fromJson(Map<String, dynamic> json) {
     return OwuiChat(
       id: json['id'],
