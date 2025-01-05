@@ -62,13 +62,13 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     } else if(_modelSelection == null && models.isEmpty) {
       return [];
     } else {
-      return _modelSelection!.models.map((model) => model.name).toList();
+      return _modelSelection!.models.map((model) => model.id).toList();
     }
   }
 
   set modelSelection (List<String> models) {
     _modelSelection = OwuiLlmModelList(
-      models: _models?.models.where((model) => models.contains(model.name)).toList() ?? []
+      models: _models?.models.where((model) => models.contains(model.id)).toList() ?? []
     );
   }
   
@@ -589,7 +589,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     if (response.statusCode == 200) {
       final jsonResponse = json.decode(response.body);
       __jsonLog(jsonResponse, tag: "CREATE CHAT RESPONSE");
-      final chat = OwuiChat.fromJson(jsonResponse, models: modelSelection); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
+      // final chat = OwuiChat.fromJson(jsonResponse, models: modelSelection); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
+      final chat = OwuiChat.fromJson(jsonResponse); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
       _chat = chat;
 
       // Register callbacks for this chat.
@@ -624,6 +625,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final jsonResponse = json.decode(response.body);
       __jsonLog(jsonResponse, tag: "LOAD CHAT RESPONSE");
       _chat = OwuiChat.fromJson(jsonResponse);
+      modelSelection = _chat?.models ?? [];
       _registerSocket();
       notifyListeners();
       return _chat!;
@@ -659,7 +661,42 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
 
   @override
-  Iterable<OwuiChatMessage> get history => _chat?.messages ?? []; // List.from(_chat?.messages ?? []);
+  Iterable<OwuiChatMessage> get history {
+    final List<OwuiChatMessage> out = [];
+    for(final message in (_chat?.messages ?? <OwuiChatMessage>[])) {
+      final siblingIds = _chat?.history[message.parentId]?.childrenIds ?? [message.id];
+      final parentModels = _chat?.history[message.parentId]?.models ?? [];
+
+      if(message.merged != null || parentModels.length > 1) {
+        /// Add all the merged messages
+        for(final siblingId in siblingIds) {
+          final sibling = _chat?.history[siblingId];
+          if(sibling != null) {
+            out.add(OwuiChatMessage.llm(
+              parentId: sibling.id,
+              text: "## ${sibling.model}:\n${sibling.text}",
+              model: sibling.model,
+              modelIdx: sibling.modelIdx,
+              modelName: sibling.modelName,
+            ));
+          }
+        }
+        if (message.merged != null) {
+          out.add(OwuiChatMessage.llm(
+            parentId: message.id,
+            text: "## MERGED:\n${message.merged?.content}",
+            model: message.model,
+            modelIdx: message.modelIdx,
+            modelName: message.modelName,
+          ));
+        }
+      } else {
+        out.add(message);
+      }
+    }
+
+    return out;
+  }
 
   @override
   set history(Iterable<ChatMessage> newHistory) {

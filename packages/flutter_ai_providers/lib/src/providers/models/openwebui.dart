@@ -364,7 +364,7 @@ class OwuiChat {
     historyCurrentId = message.id;
   }
 
-  factory OwuiChat.fromJson(Map<String, dynamic> json, {List<String>? models}) {
+  factory OwuiChat.fromJson(Map<String, dynamic> json) {
     return OwuiChat(
       id: json['id'],
       userId: json['user_id'],
@@ -377,9 +377,10 @@ class OwuiChat {
       pinned: json['pinned'],
       meta: json['meta'],
       folderId: json['folder_id'],
-      historyFiles: (json['chat']?['files'] as List?)?.map((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [],
+      historyFiles: (json['chat']?['files'] ?? [])
+        .map<OwuiFileAttachment>((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [],
       historyCurrentId: json['chat']?['history']?['currentId'],
-      models: models ?? (json['models'] is List<String> ? json['models'].cast<String>() : []),
+      models: json['chat']?['models']?.cast<String>() ?? <String>[],
       history: {
         if(json['chat']?['history']?['messages'] is Map<String, dynamic>)
           for(final entry in json['chat']['history']['messages'].entries)
@@ -447,6 +448,7 @@ class OwuiChatMessage extends ChatMessage {
     String? modelName,
     bool done = false,
     OwuiMergedResponse? merged,
+    String? text,
   }) {
     return OwuiChatMessage(
       parentId: parentId,
@@ -456,6 +458,7 @@ class OwuiChatMessage extends ChatMessage {
       modelName: modelName,
       done: done,
       merged: merged,
+      text: text,
     );
   }
 
