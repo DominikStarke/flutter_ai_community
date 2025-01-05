@@ -465,7 +465,7 @@ class OwuiChatMessage extends ChatMessage {
   factory OwuiChatMessage.user(String text, {
     required Iterable<Attachment> attachments,
     List<String>? models,
-    List<OwuiFileAttachment> files = const [],
+    List<OwuiFileAttachment>? files,
     String? parentId
   }) {
     return OwuiChatMessage(

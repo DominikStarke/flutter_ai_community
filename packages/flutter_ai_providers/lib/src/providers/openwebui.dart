@@ -53,13 +53,15 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   OwuiLlmModelList? _models;
   OwuiLlmModelList? _modelSelection;
 
-  List<String> get models => List.from(_models?.models.map((model) => model.name) ?? []);
+  List<String> get models => List.from(_models?.models.map((model) => model.id) ?? []);
   List<String> get modelSelection {
     final settingsModels = _settings?.ui.models;
+    final userSelectedModels = _modelSelection?.models.isEmpty ?? true;
 
-    if(_modelSelection == null && models.isNotEmpty) {
-      return settingsModels ?? [models.first];
-    } else if(_modelSelection == null && models.isEmpty) {
+    if(userSelectedModels && models.isNotEmpty) {
+      final retval = settingsModels ?? [models.first];
+      return retval;
+    } else if(userSelectedModels && models.isEmpty) {
       return [];
     } else {
       return _modelSelection!.models.map((model) => model.id).toList();
@@ -657,8 +659,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     _chat = null;
     notifyListeners();
   }
-
-
 
   @override
   Iterable<OwuiChatMessage> get history {
