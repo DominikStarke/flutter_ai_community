@@ -69,6 +69,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   int _incompleteMessages = 0; // Amount of messages that are not yet completed
                                // Used to determine when to close the completion stream.
 
+
+  /// FIXME: Model handling is way too complex
   OwuiLlmModelList? _models;
   OwuiLlmModelList? _modelSelection;
 
@@ -210,16 +212,11 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     if(chunk?.isNotEmpty == true) {
       __debugLog(chunk ?? "", tag: "UPDATE MESSAGE $messageId");
       _chat?.history[messageId]?.append(chunk ?? "");
-      _responseStream?.add(chunk ?? "");
+      _responseStream?.add("");
     }
 
     if(completionEvent.done) {
-      _incompleteMessages -= 1;
-      if(_incompleteMessages <= 0) {
-        __debugLog("$_incompleteMessages", tag: "CLOSE RESPONSE STREAM");
-        _responseStream?.close();
-        _responseStream = null;
-      }
+      _endCompletion(_chat?.history[messageId]);
     }
   }
 
@@ -259,43 +256,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     __jsonLog(messageStatusData ?? {}, tag: "CHAT CITATIONS CHANGED");
   }
 
-  Future<void> _startCompletionRequest () async {
-    _incompleteMessages += 1;
-    _responseStream ??= StreamController<String>.broadcast();
-
-    final llmMessage = _chat?.tail;
-    final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
-    final body = OwuiCompletionRequest(
-      model: llmMessage?.model ?? "",
-      toolIds: [
-        'web_search'
-      ],
-      chatId: _chat?.id,
-      messages: reqMessages,
-      id: llmMessage?.id,
-      sessionId: _sessionId,
-      backgroundTasks: {
-        if (reqMessages.length == 1) 'tags_generation': true,
-        if (reqMessages.length == 1) 'title_generation': true,
-      },
-    ).toJson();
-
-    __jsonLog(body, tag: "COMPLETION REQUEST");
-
-    final httpRequest = http.Request('POST', Uri.parse("$_host/chat/completions"))
-      ..headers.addAll({
-        if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-      })
-      ..body = jsonEncode(body);
-
-    http.Client().send(httpRequest) // Cannot await this, otherwise we'll miss the first chunk of the response on the socket...
-      .then((response) async {
-        final jsonResponse = json.decode(await response.stream.bytesToString());
-        __jsonLog(jsonResponse, tag: "COMPLETION RESPONSE");
-      });
-  }
-
   Future<OwuiFileAttachment> _handleAttachment (Attachment attachment) async {
     if(attachment is ImageFileAttachment) {
       _imageAttachments.clear(); // Only one image can be attached at a time? At least with llama3.2-vision + ollama.
@@ -310,7 +270,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
           'Content-Type': 'multipart/form-data',
           'Accept': 'application/json',
         })
-        ..files.add(http.MultipartFile.fromBytes('file', attachment.bytes, filename: attachment.name, contentType: MediaType.parse(attachment.mimeType)));
+        ..files.add(http.MultipartFile.fromBytes('file', attachment.bytes,
+          filename: attachment.name,
+          contentType: MediaType.parse(attachment.mimeType)
+        ));
 
       final response = await request.send();
       
@@ -388,7 +351,53 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> _completedMessage(OwuiChatMessage? message) async {
+  Future<void> _startCompletion () async {
+    _incompleteMessages += 1;
+    _responseStream ??= StreamController<String>.broadcast();
+
+    final llmMessage = _chat?.tail;
+    final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
+    final body = OwuiCompletionRequest(
+      model: llmMessage?.model ?? "",
+      toolIds: [
+        'web_search'
+      ],
+      chatId: _chat?.id,
+      messages: reqMessages,
+      id: llmMessage?.id,
+      sessionId: _sessionId,
+      backgroundTasks: {
+        if (reqMessages.length == 1) 'tags_generation': true,
+        if (reqMessages.length == 1) 'title_generation': true,
+      },
+    ).toJson();
+
+    __jsonLog(body, tag: "COMPLETION REQUEST");
+
+    final httpRequest = http.Request('POST', Uri.parse("$_host/chat/completions"))
+      ..headers.addAll({
+        if(_apiKey != null) 'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+      })
+      ..body = jsonEncode(body);
+
+    http.Client().send(httpRequest) // Cannot await this, otherwise we'll miss the first chunk of the response on the socket...
+      .then((response) async {
+        final jsonResponse = json.decode(await response.stream.bytesToString());
+        __jsonLog(jsonResponse, tag: "COMPLETION RESPONSE");
+      });
+  }
+
+  Future<void> _endCompletion (OwuiChatMessage? message) async {
+    _incompleteMessages -= 1;
+
+    if(_incompleteMessages <= 0) {
+      __debugLog("$_incompleteMessages", tag: "CLOSE RESPONSE STREAM");
+      _responseStream?.close();
+      _responseStream = null;
+      _incompleteMessages = 0;
+    }
+    
     message?.done = true;
 
     final body = {
@@ -445,7 +454,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> _loadModels() async {
+  Future<void> _loadModels () async {
     final response = await http.get(
       Uri.parse('$_host/models'),
       headers: {
@@ -502,16 +511,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         models: modelSelection
       )]);
 
-      await _saveChat();
-
-      notifyListeners();
-
-      _startCompletionRequest();
       yield* _responseStream?.stream ?? Stream.empty();
-
-      await _completedMessage(_chat?.tail);
     } else {
-
       await _streamFromUserMessage(OwuiChatMessage.user(prompt,
         attachments: attachments,
         models: modelSelection,
@@ -520,9 +521,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
       yield* _responseStream?.stream ?? Stream.empty();
 
-      await _saveChat();
     }
 
+    await _saveChat();
     
   }
 
@@ -597,6 +598,11 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         modelIdx: 0,
         modelName: modelSelection.first
       ));
+
+      _saveChat();
+      _startCompletion();
+      
+      notifyListeners();
     } else {
       throw Exception('Failed to create chat: ${response.reasonPhrase}');
     }
@@ -604,7 +610,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   Future<void> _streamFromUserMessage (OwuiChatMessage userMessage) async {
     assert(userMessage.origin == MessageOrigin.user);
-    _incompleteMessages = 0;
     // TODO: Make uploading async
     for(final attachment in userMessage.attachments) {
       userMessage.files.add(await _handleAttachment(attachment));
@@ -622,7 +627,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       
       notifyListeners();
       
-      _startCompletionRequest();
+      _startCompletion();
     }
   }
 
