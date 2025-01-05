@@ -334,8 +334,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       // Sort the chat list by the newest
       chatList.chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
-      chatListNotifier.value = chatList.chats;
       _chats = chatList;
+      chatListNotifier.value = chatList.chats;
     } else {
       throw Exception('Failed to load chats: ${response.reasonPhrase}');
     }
@@ -390,7 +390,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     final body = OwuiCompletionRequest(
       model: message?.model ?? "",
       toolIds: [
-        'web_search'
+        'web_search',
+        // 'keyless_weather',
       ],
       chatId: _chat?.id,
       messages: reqMessages,
@@ -697,9 +698,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> deleteChat (String chatId) async {
+  Future<void> deleteChat ([String? chatId]) async {
     final response = await http.delete(
-      Uri.parse('$_host/v1/chats/$chatId'),
+      Uri.parse('$_host/v1/chats/${chatId ?? _chat?.id}'),
       headers: {
         if (_apiKey != null) 'Authorization': 'Bearer $_apiKey',
         'Accept': 'application/json',
@@ -707,9 +708,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      if(_chat?.id == chatId) {
+      if(_chat?.id == chatId || chatId == null) {
         _chat = null;
         notifyListeners();
+        await _loadChatList();
       }
     } else {
       throw Exception('Failed to delete chat: ${response.reasonPhrase}');
