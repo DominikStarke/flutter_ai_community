@@ -92,6 +92,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     _modelSelection = OwuiLlmModelList(
       models: _models?.models.where((model) => models.contains(model.id)).toList() ?? []
     );
+    modelListNotifier.value = _modelSelection?.models ?? [];
   }
   
   /// A list of chats in the history. Filled once [_loadChat] is called.
@@ -106,7 +107,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   /// Emits a list of Llm Models, when the list changes.
   /// Typically called right after after [_loadModels] is called.
-  ValueNotifier<List<OwuiLlmModel>> modelListChanged = ValueNotifier([]);
+  ValueNotifier<List<OwuiLlmModel>> modelListNotifier = ValueNotifier([]);
 
   final String _host;
   final String? _apiKey;
@@ -444,6 +445,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
     if(_models == null) {
       await _loadModels();
+      modelListNotifier.value = _models?.models ?? [];
     }
   }
 
@@ -602,14 +604,18 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         "chat_id": chat.id,
       }])}");
       
-      if(_chat?.tail?.origin == MessageOrigin.user){
-        chat.appendMessage(OwuiChatMessage.llm(
-          parentId: chat.tail?.id,
-          model: modelSelection.first,
-          modelIdx: 0,
-          modelName: modelSelection.first
-        ));
-        _startCompletion(chat.tail);
+      if (_chat?.tail?.origin == MessageOrigin.user) {
+        final tail = _chat?.tail;
+        for (final model in modelSelection) {
+          final message = OwuiChatMessage.llm(
+            parentId: tail?.id,
+            model: model,
+            modelIdx: 0,
+            modelName: model
+          );
+          chat.appendSibling(message);
+          _startCompletion(message);
+        }
       }
 
       await _saveChat(); // required exclusively for title generation... yay!
