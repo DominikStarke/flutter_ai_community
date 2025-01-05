@@ -164,7 +164,13 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         _handleSessionEvent(eventData);
         break;
       case 42: // nice
-        final socketEvent = json.decode(eventData);
+        String decodedEventData;
+        try {
+          decodedEventData = utf8.decode(eventData.runes.toList());
+        } catch (e) {
+          decodedEventData = eventData;
+        }
+        final socketEvent = json.decode(decodedEventData);
         
         if(socketEvent[0] == "chat-events") {
           final chatEvent = socketEvent[1];
@@ -258,15 +264,26 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     final status = OwuiStatusHistoryEntry.fromJson(messageStatusData ?? {});
 
     _chat?.history[messageId]?.statusHistory.add(status);
+
+    if((_chat?.history[messageId]?.text ?? "").isEmpty) {
+      _chat?.history[messageId]?.text = " "; // Hmmm...
+      _responseStream?.add("");
+    }
   }
 
   void _handleCitationEvent (String messageId, Map<String, dynamic> chatEvent) {
     final messageStatusData = chatEvent["data"];
     __jsonLog(messageStatusData ?? {}, tag: "CHAT CITATIONS CHANGED");
 
+
     _chat?.history[messageId]?.sources.add(
       OwuiDocumentSource.fromJson(messageStatusData ?? {})
     );
+    
+    if((_chat?.history[messageId]?.text ?? "").isEmpty) {
+      _chat?.history[messageId]?.text = " "; // Hmmm...
+      _responseStream?.add("");
+    }
   }
 
   Future<OwuiFileAttachment> _handleAttachment (Attachment attachment) async {
@@ -716,21 +733,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         for(final siblingId in siblingIds) {
           final sibling = _chat?.history[siblingId];
           if(sibling != null) {
-            if(sibling.sources.isNotEmpty) {
-              // FIXME: This is just for fun. It outputs the sources as messages.
-              for(final source in sibling.sources) {
-                out.add(OwuiChatMessage.llm(
-                  parentId: message.id,
-                  text: """*Source*
-## ${source.source["name"]}
-${source.metadata.firstOrNull?["source"]}""",
-                  model: sibling.model,
-                  modelIdx: sibling.modelIdx,
-                  modelName: sibling.modelName,
-                ));
-              }
-            }
-
             out.add(OwuiChatMessage.llm(
               parentId: message.id,
               id: sibling.id,
@@ -741,28 +743,17 @@ ${source.metadata.firstOrNull?["source"]}""",
             ));
           }
         }
-        if (message.merged != null) {
-          out.add(OwuiChatMessage.llm(
-            parentId: message.id,
-            text: "## Merged:\n${message.merged?.content}",
-            model: message.model,
-            modelIdx: message.modelIdx,
-            modelName: message.modelName,
-          ));
-        }
+        // Not like this...
+        // if (message.merged != null) {
+        //   out.add(OwuiChatMessage.llm(
+        //     parentId: message.id,
+        //     text: "## Merged:\n${message.merged?.content}",
+        //     model: message.model,
+        //     modelIdx: message.modelIdx,
+        //     modelName: message.modelName,
+        //   ));
+        // }
       } else {
-        // FIXME: This is just for fun. It outputs the sources as messages.
-        for(final source in message.sources) {
-          out.add(OwuiChatMessage.llm(
-            parentId: message.id,
-            text: """*Source*
-## ${source.source["name"]}
-${source.metadata.firstOrNull?["source"]}""",
-            model: message.model,
-            modelIdx: message.modelIdx,
-            modelName: message.modelName,
-          ));
-        }
         out.add(message);
       }
     }

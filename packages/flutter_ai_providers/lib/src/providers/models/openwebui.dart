@@ -228,9 +228,9 @@ class OwuiFileAttachment {
 }
 
 class OwuiDocumentSource {
-  final List<String> document;
-  final List<Map<String, String>> metadata;
-  final Map<String, String> source;
+  final List<String>? document;
+  final List<OwuiDocumentMetaData>? metadata;
+  final OwuiDocumentSourceInfo? source;
 
   OwuiDocumentSource({
     required this.document,
@@ -239,10 +239,11 @@ class OwuiDocumentSource {
   });
 
   factory OwuiDocumentSource.fromJson(Map<String, dynamic> json) {
+    // FIXME: There's some utf8 related weirdness here
     return OwuiDocumentSource(
-      document: List<String>.from(json['document']),
-      metadata: List<Map<String, String>>.from(json['metadata'].map((item) => Map<String, String>.from(item))),
-      source: Map<String, String>.from(json['source']),
+      document: json['document']?.cast<String>(),
+      metadata: (json['metadata']?.map((item) => OwuiDocumentMetaData.fromJson(item)).toList() ?? []).cast<OwuiDocumentMetaData>(),
+      source: OwuiDocumentSourceInfo.fromJson(json['source']),
     );
   }
 
@@ -250,7 +251,47 @@ class OwuiDocumentSource {
     return {
       'document': document,
       'metadata': metadata,
+      'source': source?.toJson(),
+    };
+  }
+}
+
+class OwuiDocumentMetaData {
+  final String? source;
+
+  OwuiDocumentMetaData({
+    this.source,
+  });
+
+  factory OwuiDocumentMetaData.fromJson(Map<String, dynamic> json) {
+    return OwuiDocumentMetaData(
+      source: utf8.decode(json['source']?.runes.toList() ?? []),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
       'source': source,
+    };
+  }
+}
+
+class OwuiDocumentSourceInfo {
+  final String name;
+
+  OwuiDocumentSourceInfo({
+    required this.name,
+  });
+
+  factory OwuiDocumentSourceInfo.fromJson(Map<String, dynamic> json) {
+    return OwuiDocumentSourceInfo(
+      name: utf8.decode(json['name'].runes.toList()),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
     };
   }
 }
@@ -324,7 +365,6 @@ class OwuiChat {
     this.id,
     this.userId,
     this.title,
-    // required this.messages,
     DateTime? updatedAt,
     DateTime? createdAt,
     this.shareId,
