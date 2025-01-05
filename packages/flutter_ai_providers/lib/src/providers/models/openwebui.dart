@@ -227,19 +227,19 @@ class OwuiFileAttachment {
   }
 }
 
-class OwuiCitationData {
+class OwuiDocumentSource {
   final List<String> document;
   final List<Map<String, String>> metadata;
   final Map<String, String> source;
 
-  OwuiCitationData({
+  OwuiDocumentSource({
     required this.document,
     required this.metadata,
     required this.source,
   });
 
-  factory OwuiCitationData.fromJson(Map<String, dynamic> json) {
-    return OwuiCitationData(
+  factory OwuiDocumentSource.fromJson(Map<String, dynamic> json) {
+    return OwuiDocumentSource(
       document: List<String>.from(json['document']),
       metadata: List<Map<String, String>>.from(json['metadata'].map((item) => Map<String, String>.from(item))),
       source: Map<String, String>.from(json['source']),
@@ -425,7 +425,9 @@ class OwuiChatMessage extends ChatMessage {
   final String? modelName;
   final List<OwuiFileAttachment> files;
   final OwuiMergedResponse? merged;
+  final List<OwuiStatusHistoryEntry> statusHistory;
   bool? done; // meh
+  final List<OwuiDocumentSource> sources;
 
   OwuiChatMessage({
     String? id,
@@ -442,10 +444,14 @@ class OwuiChatMessage extends ChatMessage {
     List<OwuiFileAttachment>? files,
     this.done,
     this.merged,
+    List<OwuiStatusHistoryEntry>? statusHistory,
+    List<OwuiDocumentSource>? sources,
   }): id = id ?? UuidV4().generate(),
       timestamp = timestamp ?? DateTime.now(),
       files = files ?? [], // Non const
       childrenIds = childrenIds ?? [], // Non const
+      sources = sources ?? [], // Non const
+      statusHistory = statusHistory ?? [], // Non const
       super(
         attachments: attachments ?? [] // Non const
       );
@@ -523,6 +529,8 @@ class OwuiChatMessage extends ChatMessage {
           );
         }
       }).toList(),
+      sources: (json['sources'] as List?)?.map((source) => OwuiDocumentSource.fromJson(source)).toList() ?? [],
+      statusHistory: (json['statusHistory'] as List?)?.map((entry) => OwuiStatusHistoryEntry.fromJson(entry)).toList() ?? [],
       done: json['done'],
       files: files,
       model: json['model'],
@@ -542,6 +550,8 @@ class OwuiChatMessage extends ChatMessage {
       'content': text,
       'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
       'files': files.map((file) => file.toJson()).toList(),
+      'sources': sources.map((source) => source.toJson()).toList(),
+      'statusHistory': statusHistory?.map((entry) => entry.toJson()).toList(),
       if(merged != null) 'merged': merged!.toJson(),
       if(model != null) 'model': model,
       if(models != null) 'models': models,
