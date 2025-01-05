@@ -8,10 +8,26 @@ import 'package:http/http.dart' as http;
 import 'dart:io' show WebSocket;
 
 import 'models/openwebui.dart';
- import 'package:http_parser/http_parser.dart';
-
+import 'package:http_parser/http_parser.dart';
 
 export 'models/openwebui.dart';
+
+final bool __debug = true;
+
+void __debugLog (String message, {String tag = "INFO"}) {
+  if(!__debug) return;
+  dev.log("OPENWEBUI[$tag] $message");
+}
+
+void __jsonLog (dynamic val, {String tag = "INFO"}) {
+  if(!__debug) return;
+  try {
+    dev.log("OPENWEBUI[$tag] ${JsonEncoder.withIndent('  ').convert(val)}");
+  } catch( e ) {
+    __debugLog("$val", tag: "JSON DECODE ERROR");
+  }
+}
+
 /// A provider for [open-webui](https://openwebui.com/)
 /// Use open-webui as unified chat provider.
 class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
@@ -90,25 +106,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   OwuiSettings? _settings;
   WebSocket? _socket;
 
-  final bool __debug = true;
-
-  void __debugLog (String message, {String tag = "INFO"}) {
-    if(!__debug) return;
-    dev.log("OPENWEBUI[$tag] $message");
-  }
-
-  void __jsonLog (dynamic val, {String tag = "INFO"}) {
-    if(!__debug) return;
-    try {
-      dev.log("OPENWEBUI[$tag] ${JsonEncoder.withIndent('  ').convert(val)}");
-    } catch( e ) {
-      __debugLog("$val", tag: "JSON DECODE ERROR");
-    }
-  }
-
   Future<void> _startSocket () async {
-    
-
     final baseUri = Uri.parse(_host);
     final wsUrl = Uri.parse('ws://${baseUri.host}:${baseUri.port}/ws/socket.io/?EIO=4&transport=websocket');
 
@@ -579,8 +577,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     if (response.statusCode == 200) {
       final jsonResponse = json.decode(response.body);
       __jsonLog(jsonResponse, tag: "CREATE CHAT RESPONSE");
-      // final chat = OwuiChat.fromJson(jsonResponse, models: modelSelection); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
-      final chat = OwuiChat.fromJson(jsonResponse); //, extraFiles: owuiFiles, extraHistory: _chat?.history ?? {});
+      final chat = OwuiChat.fromJson(jsonResponse);
       _chat = chat;
 
       // Register callbacks for this chat.
