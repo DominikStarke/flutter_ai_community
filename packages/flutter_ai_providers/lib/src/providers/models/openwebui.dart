@@ -58,7 +58,7 @@ class OwuiChatCompletionEvent {
   final List<OwuiChatResponseChoice>? choices;
   final String? content;
   final bool done;
-  final List? sources;
+  final List<OwuiDocumentSource>? sources;
 
   /// Creates an instance of [OwuiChatCompletionEvent].
   ///
@@ -73,7 +73,7 @@ class OwuiChatCompletionEvent {
   /// Creates an instance of [OwuiChatCompletionEvent] from a JSON object.
   factory OwuiChatCompletionEvent.fromJson(Map<String, dynamic> json) {
     return OwuiChatCompletionEvent(
-      sources: json['sources'],
+      sources: json['sources']?.map((source) => OwuiDocumentSource.fromJson(source)).toList().cast<OwuiDocumentSource>(),
       done: json['done'] ?? false,
       content: json['content'],
       choices: (json['choices'] as List?)?.map((choice) => OwuiChatResponseChoice.fromJson(choice)).toList(),
@@ -433,11 +433,11 @@ class OwuiChat {
     return messages.isNotEmpty ? messages.last : null;
   }
 
-  void appendMessage (OwuiChatMessage message) {
-    tail?.childrenIds.add(message.id);
-    history[message.id] = message;
-    historyCurrentId = message.id;
-  }
+  // void appendMessage (OwuiChatMessage message) {
+  //   tail?.childrenIds.add(message.id);
+  //   history[message.id] = message;
+  //   historyCurrentId = message.id;
+  // }
 
   void appendSibling (OwuiChatMessage message) {
     history[message.id] = message;

@@ -61,6 +61,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  final String _host;
+  final String? _apiKey;
+
   // Amount of messages that are not yet completed
   // Used to determine when to close the completion stream.
   int _incompleteMessages = 0;
@@ -70,9 +73,13 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   /// FIXME: Model handling is way too complex and buggy.
   OwuiLlmModelList? _models;
+  /// FIXME: Model handling is way too complex and buggy.
   OwuiLlmModelList? _modelSelection;
 
+  /// FIXME: Model handling is way too complex and buggy.
   List<String> get models => List.from(_models?.models.map((model) => model.id) ?? []);
+  
+  /// FIXME: Model handling is way too complex and buggy.
   List<String> get modelSelection {
     final settingsModels = _settings?.ui.models;
     final userSelectedModels = _modelSelection?.models.isEmpty ?? true;
@@ -87,8 +94,17 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// FIXME: Model handling is way too complex and buggy.
+  set modelSelection (List<String> models) {
+    _modelSelection = OwuiLlmModelList(
+      models: _models?.models.where((model) => models.contains(model.id)).toList() ?? []
+    );
+    modelListNotifier.value = _modelSelection?.models ?? [];
+  }
+
+  /// Some weird utf-8 <> utf-16 conversion issue.
+  /// Everything has to go through this function or we'll end up with infinitly big strings!
   dynamic jsonDecode (String value) {
-    /// Some weird utf-8 <> utf-16 conversion issue.
     try {
       final runes = value.runes.toList();
       return json.decode(utf8.decode(runes));
@@ -97,12 +113,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  set modelSelection (List<String> models) {
-    _modelSelection = OwuiLlmModelList(
-      models: _models?.models.where((model) => models.contains(model.id)).toList() ?? []
-    );
-    modelListNotifier.value = _modelSelection?.models ?? [];
-  }
   
   /// A list of chats in the history. Filled once [_loadChat] is called.
   OwuiChatList? _chats;
@@ -118,8 +128,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   /// Typically called right after after [_loadModels] is called.
   ValueNotifier<List<OwuiLlmModel>> modelListNotifier = ValueNotifier([]);
 
-  final String _host;
-  final String? _apiKey;
+
 
   /// Filled by the library when [_loadSettings] is called and subsequently a session_id is annotated on the socket.
   String _sessionId = "";
@@ -131,10 +140,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   /// Internal state representing the current settings, set by [_loadSettings].
   OwuiSettings? _settings;
 
-  /// Openwebui socket connection. All spontaneous events are handled here, including chat completions.
+  /// Openwebui socket connection.
+  /// All spontaneous events are handled here, including chat completions.
   WebSocket? _socket;
 
-  /// Openwebui socket connection. All spontaneous events are handled here, including chat completions.
+  /// Openwebui socket connection.
+  /// All spontaneous events are handled here, including chat completions.
   Future<void> _startSocket () async {
     final baseUri = Uri.parse(_host);
     final wsUrl = Uri.parse('ws://${baseUri.host}:${baseUri.port}/ws/socket.io/?EIO=4&transport=websocket');
@@ -155,6 +166,19 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   /// Handle the different types of socket events.
+  /// Currently implemented:  
+  /// * 42
+  ///   - chat:completion
+  ///   - chat:title
+  ///   - chat:tags
+  ///   - status
+  ///   - citation
+  /// * 40
+  ///   - Session
+  /// * 2
+  ///   - Ping
+  /// * 0:
+  ///   - Connect
   _handleSocketEvent(dynamic event) {
     final status = RegExp(r'^\d{1,2}').stringMatch(event);
 
@@ -210,16 +234,22 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }])}");
   }
 
+  /// The socket has connected and successfully received a 0 message.
+  /// Authorize the socket with the API key.
   void _handleConnectEvent () {
     __debugLog("SOCKET CONNECTED");
     _socket?.add('40{"token":"$_apiKey"}'); // Authorize
   }
 
+  /// Respond to ping from the server.
+  /// The connection closes if the server does not receive a ping within x seconds.
   void _handlePingEvent() {
     __debugLog("PING");
     _socket?.add('3');
   }
 
+  /// The server assigned a session id for us to store.
+  /// This is required for chat completions.
   void _handleSessionEvent (String eventData) {
     final jsonData = jsonDecode(eventData);
     if(jsonData['sid'] != null) {
@@ -228,22 +258,23 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Assign the response text, sources and completion status to the chat message.
+  /// If the completion is done close the completion stream and call [_endCompletion].
+  /// [messageId] reference to the message in [_chat.history].
+  /// [chatEventData] the completion event data.
   void _handleCompletionEvent (String messageId, Map<String, dynamic> chatEventData) {
     final completionEvent = OwuiChatCompletionEvent.fromJson(chatEventData["data"]);
 
     if(completionEvent.sources?.isNotEmpty ==  true) {
-      _chat?.history[messageId]?.sources?..clear()..addAll(
-        completionEvent.sources?.map((source) => OwuiDocumentSource.fromJson(source)) ?? []
-      );
+      _chat?.history[messageId]?.sources
+        ?..clear()..addAll(completionEvent.sources!);
       __jsonLog(chatEventData["data"], tag: "CHAT ADD SOURCES"); // ??? Does this occure?
     }
 
     // Compat 0.5.2 > 0.5.4 -> copletionsEvent.choices is no longer relied on?
-    final chunk = completionEvent.content; // It's now always the complete text response -.-'
-
-    if(chunk?.isNotEmpty == true) {
-      __debugLog(chunk ?? "", tag: "UPDATE MESSAGE $messageId");
-      _chat?.history[messageId]?.text = chunk;
+    if(completionEvent.content?.isNotEmpty == true) {
+      __debugLog(completionEvent.content ?? "", tag: "UPDATE MESSAGE $messageId");
+      _chat?.history[messageId]?.text = completionEvent.content;
       _responseStream?.add("");
     }
 
@@ -252,6 +283,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// The chats title has changed.
+  /// Update the chat title, invoke chat list update.
+  /// Updates [chatListNotifier].
   void _handleTitleEvent (Map<String, dynamic> chatEvent) {
     if(chatEvent["chat_id"] == _chat?.id) {
       _chat?.title = chatEvent["data"]?["data"];
@@ -260,6 +294,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// The chats tags have changed.
+  /// Update the chat tags, notifies provider listeners.
   void _handleTagsEvent (Map<String, dynamic> chatEvent) {
     if(chatEvent["chat_id"] == _chat?.id) {
       final tags = chatEvent["data"]?["data"];
@@ -268,6 +304,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// The message has a new status attachment.
+  /// This typically occures, when for example a tool is invoked.
   void _handleStatusEvent (String messageId, Map<String, dynamic> chatEvent) {
     final messageStatusData = chatEvent["data"];
     __jsonLog(messageStatusData ?? {}, tag: "CHAT STATUS CHANGED");
@@ -276,12 +314,15 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     _chat?.history[messageId]?.statusHistory.add(status);
 
     if((_chat?.history[messageId]?.text ?? "").isEmpty) {
+      /// This is so the loading status for the messages stops.
       _chat?.history[messageId]?.text = " "; // Hmmm...
     }
 
     _responseStream?.add("");
   }
 
+  /// The message has a new citation attachment.
+  /// This for example happens on web searches, where results are returned as citations.
   void _handleCitationEvent (String messageId, Map<String, dynamic> chatEvent) {
     final messageStatusData = chatEvent["data"];
     __jsonLog(messageStatusData ?? {}, tag: "CHAT CITATIONS CHANGED");
@@ -297,6 +338,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Uploads an attachment to the open-webui server.
+  /// 
+  /// [attachment] the [Attachment] to upload (from flutter_ai_toolkit).
+  /// Returns an [OwuiFileAttachment] that can be attached to a [OwuiChatMessage].
   Future<OwuiFileAttachment> _handleAttachment (Attachment attachment) async {
     if(attachment is ImageFileAttachment) {
       _imageAttachments.clear(); // Only one image can be attached at a time? At least with llama3.2-vision + ollama.
@@ -329,6 +374,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     throw Exception('Unsupported FileAttachment type: $attachment');
   }
 
+  /// Get a list of chats from the server.
+  /// This is typically called on startup and whenever the provider seems fit.
   Future<void> _loadChatList () async {
     final response = await http.get(
       Uri.parse('$_host/v1/chats/list'),
@@ -352,6 +399,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// List all chats on page [page].
   Future<List<OwuiChatListEntry>> listChatsPage (int page) async {
     final response = await http.get(
       Uri.parse('$_host/v1/chats/?page=$page'),
@@ -370,7 +418,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<OwuiChat> _saveChat () async {
+  /// Convert [_chat] to JSON and save it to the server.
+  /// The [_chat] is **REPLACED** with the response from the server.
+  /// Notifies provider listeners.
+  Future<void> _saveChat () async {
     final body = _chat?.toJson(models: modelSelection) ?? {};
     final response = await http.post(
       Uri.parse('$_host/v1/chats/${_chat?.id}'),
@@ -386,19 +437,20 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "SAVE CHAT RESPONSE");
       _chat = OwuiChat.fromJson(jsonResponse); // Avoid side effect?
-      return _chat!;
+      notifyListeners();
     } else {
       throw Exception('Failed to save chat: ${response.reasonPhrase}');
     }
   }
 
+  /// Start a completion request for a message.
+  /// The initial request is a http request, which is started to run parallel.
+  /// The responses are handled by [_handleSocketEvent].
   void _startCompletion (OwuiChatMessage? message) {
     _incompleteMessages += 1;
     _responseStream ??= StreamController<String>.broadcast();
     
-    
-    _socket?.add('42["usage",{"action":"chat","${message?.model}}":"deepseek-chat","chat_id":"${_chat?.id}"}]');
-    
+    // _socket?.add('42["usage",{"action":"chat","${message?.model}}":"deepseek-chat","chat_id":"${_chat?.id}"}]');
     
     // final llmMessage = _chat?.tail;
     final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
@@ -437,6 +489,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       });
   }
 
+  /// Close the completion stream if all messages are completed.
+  /// This is called from [_handleCompletionEvent].
+  /// 
+  /// [message] the message to be completed.
   Future<void> _endCompletion (OwuiChatMessage? message) async {
     _incompleteMessages -= 1;
 
@@ -474,6 +530,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Load settings and models.
+  /// This will notify all listeners.
   Future<void> _configure () async {
     if(_settings == null) {
       await _loadSettings();
@@ -481,10 +539,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
     if(_models == null) {
       await _loadModels();
-      modelListNotifier.value = _models?.models ?? [];
     }
   }
 
+  /// Load openwebui settings.
+  /// 
+  /// See [OwuiSettings].
   Future<void> _loadSettings() async {
     final response = await http.get(
       Uri.parse('$_host/v1/users/user/settings'),
@@ -505,6 +565,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Load openwebui models.
+  /// 
+  /// See [OwuiLlmModelList].
   Future<void> _loadModels () async {
     final response = await http.get(
       Uri.parse('$_host/models'),
@@ -518,6 +581,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "MODELS");
       _models = OwuiLlmModelList.fromJson(jsonResponse);
+       modelListNotifier.value = _models?.models ?? [];
     } else {
       throw Exception('Failed to load models: ${response.reasonPhrase}');
     }
@@ -533,22 +597,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     String prompt, {
     Iterable<Attachment> attachments = const [],
   }) async* {
-    // final userMessage = OwuiChatMessage.user(prompt,
-    //   attachments: attachments,
-    //   models: modelSelection
-    // );
-
-    // for(final model in modelSelection) {
-    //   final llmMessage = OwuiChatMessage.llm(
-    //     parentId: userMessage.id,
-    //     model: model,
-    //     modelIdx: modelSelection.indexOf(model),
-    //     modelName: model
-    //   );
-    //   userMessage.childrenIds.add(llmMessage.id);
-    //   // TODO: Make multi chats actually work
-    //   yield* _startCompletionRequest();
-    // }
+    // FIXME: THIS IS CURRENTLY NOT SUPPORTED
+    // Can we assume this is only called when audio is added?
+    // In that case maybe rename?
+    throw UnimplementedError();
   }
 
   @override
@@ -598,7 +650,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         }
       }
 
-      _chat?.appendMessage(OwuiChatMessage(
+      _chat?.appendSibling(OwuiChatMessage(
         origin: message.origin,
         text: message.text,
         timestamp: DateTime.now(),
@@ -656,8 +708,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       }
 
       await _saveChat(); // required exclusively for title generation... yay!
-
-      notifyListeners();
     } else {
       throw Exception('Failed to create chat: ${response.reasonPhrase}');
     }
@@ -666,7 +716,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   Future<void> _streamFromUserMessage (OwuiChatMessage userMessage) async {
     assert(userMessage.origin == MessageOrigin.user);
 
-    _chat?.appendMessage(userMessage);
+    _chat?.appendSibling(userMessage);
     final List<OwuiChatMessage> outMessages = [];
 
     for (final model in modelSelection) {
