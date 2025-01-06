@@ -68,7 +68,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   // Streams of this provider emits only empty messages.
   StreamController<String>? _responseStream;
 
-
   /// FIXME: Model handling is way too complex and buggy.
   OwuiLlmModelList? _models;
   OwuiLlmModelList? _modelSelection;
@@ -85,6 +84,16 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       return [];
     } else {
       return _modelSelection!.models.map((model) => model.id).toList();
+    }
+  }
+
+  dynamic jsonDecode (String value) {
+    /// Some weird utf-8 <> utf-16 conversion issue.
+    try {
+      final runes = value.runes.toList();
+      return json.decode(utf8.decode(runes));
+    } catch (e) {
+      return json.decode(value);
     }
   }
 
@@ -154,6 +163,8 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
 
     final eventData = event.substring(status.length);
+
+
     switch (int.parse(status)) {
       case 0:
         _handleConnectEvent();
@@ -164,13 +175,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         _handleSessionEvent(eventData);
         break;
       case 42: // nice
-        String decodedEventData;
-        try {
-          decodedEventData = utf8.decode(eventData.runes.toList());
-        } catch (e) {
-          decodedEventData = eventData;
-        }
-        final socketEvent = json.decode(decodedEventData);
+        final socketEvent = jsonDecode(eventData);
         
         if(socketEvent[0] == "chat-events") {
           final chatEvent = socketEvent[1];
@@ -216,7 +221,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   void _handleSessionEvent (String eventData) {
-    final jsonData = json.decode(eventData);
+    final jsonData = jsonDecode(eventData);
     if(jsonData['sid'] != null) {
       __jsonLog(jsonData, tag: "SESSION");
       _sessionId = jsonData['sid'];
@@ -227,13 +232,18 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     final completionEvent = OwuiChatCompletionEvent.fromJson(chatEventData["data"]);
 
     if(completionEvent.sources?.isNotEmpty ==  true) {
+      _chat?.history[messageId]?.sources?..clear()..addAll(
+        completionEvent.sources?.map((source) => OwuiDocumentSource.fromJson(source)) ?? []
+      );
       __jsonLog(chatEventData["data"], tag: "CHAT ADD SOURCES"); // ??? Does this occure?
     }
 
-    final chunk = completionEvent.choices?.map((choice) => choice.content ?? '').join();
+    // Compat 0.5.2 > 0.5.4 -> copletionsEvent.choices is no longer relied on?
+    final chunk = completionEvent.content; // It's now always the complete text response -.-'
+
     if(chunk?.isNotEmpty == true) {
       __debugLog(chunk ?? "", tag: "UPDATE MESSAGE $messageId");
-      _chat?.history[messageId]?.append(chunk ?? "");
+      _chat?.history[messageId]?.text = chunk;
       _responseStream?.add("");
     }
 
@@ -267,8 +277,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
     if((_chat?.history[messageId]?.text ?? "").isEmpty) {
       _chat?.history[messageId]?.text = " "; // Hmmm...
-      _responseStream?.add("");
     }
+
+    _responseStream?.add("");
   }
 
   void _handleCitationEvent (String messageId, Map<String, dynamic> chatEvent) {
@@ -308,7 +319,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final response = await request.send();
       
       if (response.statusCode == 200) {
-        final responseBody = json.decode(await response.stream.bytesToString());
+        final responseBody = jsonDecode(await response.stream.bytesToString());
         __jsonLog(responseBody, tag: "FILE UPLOAD RESPONSE");
         return OwuiFileAttachment.fromJson(responseBody);
       } else {
@@ -328,7 +339,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final responseBody = json.decode(response.body);
+      final responseBody = jsonDecode(response.body);
       __jsonLog(responseBody, tag: "LOAD CHAT LIST RESPONSE");
       final chatList = OwuiChatList.fromJson(responseBody);
       // Sort the chat list by the newest
@@ -351,7 +362,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if(response.statusCode == 200) {
-      final responseBody = json.decode(response.body);
+      final responseBody = jsonDecode(response.body);
       __debugLog(responseBody, tag: "LIST CHAT PAGE $page");
       return OwuiChatList.fromJson(responseBody).chats;
     } else {
@@ -372,7 +383,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
+      final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "SAVE CHAT RESPONSE");
       _chat = OwuiChat.fromJson(jsonResponse); // Avoid side effect?
       return _chat!;
@@ -384,7 +395,11 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   void _startCompletion (OwuiChatMessage? message) {
     _incompleteMessages += 1;
     _responseStream ??= StreamController<String>.broadcast();
-
+    
+    
+    _socket?.add('42["usage",{"action":"chat","${message?.model}}":"deepseek-chat","chat_id":"${_chat?.id}"}]');
+    
+    
     // final llmMessage = _chat?.tail;
     final reqMessages = _chat?.messages.where((m) => (m.text ?? "").isNotEmpty).toList() ?? [];
     final body = OwuiCompletionRequest(
@@ -393,6 +408,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
         'web_search',
         // 'keyless_weather',
       ],
+      features: {
+        "web_search": false
+      },
       chatId: _chat?.id,
       messages: reqMessages,
       id: message?.id,
@@ -414,7 +432,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
     http.Client().send(httpRequest) // Cannot await this, otherwise we'll miss the first chunk of the response on the socket...
       .then((response) async {
-        final jsonResponse = json.decode(await response.stream.bytesToString());
+        final jsonResponse = jsonDecode(await response.stream.bytesToString());
         __jsonLog(jsonResponse, tag: "COMPLETION RESPONSE");
       });
   }
@@ -477,8 +495,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
+      final jsonResponse = jsonDecode(response.body);
       _settings = OwuiSettings.fromJson(jsonResponse);
+      modelSelection = _settings?.ui.models ?? [];
       __jsonLog(jsonResponse, tag: "SETTINGS");
       
     } else {
@@ -496,7 +515,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
+      final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "MODELS");
       _models = OwuiLlmModelList.fromJson(jsonResponse);
     } else {
@@ -610,7 +629,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
+      final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "CREATE CHAT RESPONSE");
       final chat = OwuiChat.fromJson(jsonResponse);
       _chat = chat;
@@ -686,7 +705,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     );
 
     if (response.statusCode == 200) {
-      final jsonResponse = json.decode(response.body);
+      final jsonResponse = jsonDecode(response.body);
       __jsonLog(jsonResponse, tag: "LOAD CHAT RESPONSE");
       _chat = OwuiChat.fromJson(jsonResponse);
       modelSelection = _chat?.models ?? [];

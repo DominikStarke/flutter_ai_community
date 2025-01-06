@@ -56,6 +56,7 @@ class OwuiCompletionRequest {
 /// Decode a chat response from the open-webui API.
 class OwuiChatCompletionEvent {
   final List<OwuiChatResponseChoice>? choices;
+  final String? content;
   final bool done;
   final List? sources;
 
@@ -65,6 +66,7 @@ class OwuiChatCompletionEvent {
   OwuiChatCompletionEvent({
     required this.done,
     this.choices,
+    this.content,
     this.sources,
   });
 
@@ -73,6 +75,7 @@ class OwuiChatCompletionEvent {
     return OwuiChatCompletionEvent(
       sources: json['sources'],
       done: json['done'] ?? false,
+      content: json['content'],
       choices: (json['choices'] as List?)?.map((choice) => OwuiChatResponseChoice.fromJson(choice)).toList(),
     );
   }
@@ -231,11 +234,13 @@ class OwuiDocumentSource {
   final List<String>? document;
   final List<OwuiDocumentMetaData>? metadata;
   final OwuiDocumentSourceInfo? source;
+  final List<num>? distances;
 
   OwuiDocumentSource({
     required this.document,
     required this.metadata,
     required this.source,
+    this.distances,
   });
 
   factory OwuiDocumentSource.fromJson(Map<String, dynamic> json) {
@@ -244,6 +249,7 @@ class OwuiDocumentSource {
       document: json['document']?.cast<String>(),
       metadata: (json['metadata']?.map((item) => OwuiDocumentMetaData.fromJson(item)).toList() ?? []).cast<OwuiDocumentMetaData>(),
       source: OwuiDocumentSourceInfo.fromJson(json['source']),
+      distances: json['distances']?.cast<num>(),
     );
   }
 
@@ -252,26 +258,55 @@ class OwuiDocumentSource {
       'document': document,
       'metadata': metadata,
       'source': source?.toJson(),
+      'distances': distances ?? [],
     };
   }
 }
 
 class OwuiDocumentMetaData {
   final String? source;
+  final String? contentType;
+  final String? createdBy;
+  final String? embeddingConfig;
+  final String? fileId;
+  final String? hash;
+  final String? name;
+  final int? startIndex;
 
   OwuiDocumentMetaData({
     this.source,
+    this.contentType,
+    this.createdBy,
+    this.embeddingConfig,
+    this.fileId,
+    this.hash,
+    this.name,
+    this.startIndex,
   });
 
   factory OwuiDocumentMetaData.fromJson(Map<String, dynamic> json) {
     return OwuiDocumentMetaData(
-      source: utf8.decode(json['source']?.runes.toList() ?? []),
+      source: json['source'],
+      contentType: json['Content-Type'],
+      createdBy: json['created_by'],
+      embeddingConfig: json['embedding_config'],
+      fileId: json['file_id'],
+      hash: json['hash'],
+      name: json['name'],
+      startIndex: json['start_index'],
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'source': source,
+      'Content-Type': contentType,
+      'created_by': createdBy,
+      'embedding_config': embeddingConfig,
+      'file_id': fileId,
+      'hash': hash,
+      'name': name,
+      'start_index': startIndex,
     };
   }
 }
@@ -285,7 +320,7 @@ class OwuiDocumentSourceInfo {
 
   factory OwuiDocumentSourceInfo.fromJson(Map<String, dynamic> json) {
     return OwuiDocumentSourceInfo(
-      name: utf8.decode(json['name'].runes.toList()),
+      name:json['name'],
     );
   }
 
@@ -328,7 +363,7 @@ class OwuiChatListEntry {
   factory OwuiChatListEntry.fromJson(Map<String, dynamic> json) {
     return OwuiChatListEntry(
       id: json['id'],
-      title: utf8.decode(json['title'].runes.toList()), // Ensure proper decoding
+      title: json['title'], // Ensure proper decoding
       updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updated_at'] * 1000),
       createdAt: DateTime.fromMillisecondsSinceEpoch(json['created_at'] * 1000),
     );
@@ -417,7 +452,7 @@ class OwuiChat {
     return OwuiChat(
       id: json['id'],
       userId: json['user_id'],
-      title: utf8.decode(json['title'].runes.toList()), // Ensure proper decoding
+      title: json['title'], // Ensure proper decoding
       // messages: chat, // use the messages getter instead...
       updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updated_at'] * 1000),
       createdAt: DateTime.fromMillisecondsSinceEpoch(json['created_at'] * 1000),
@@ -551,7 +586,7 @@ class OwuiChatMessage extends ChatMessage {
       parentId: json['parentId'],
       childrenIds: List<String>.from(json['childrenIds'] ?? []),
       origin: json['role'] == 'user' ? MessageOrigin.user : MessageOrigin.llm,
-      text: json['content'] == null || json['content'] == '' ? null : utf8.decode((json['content']).runes.toList()),
+      text: json['content'] == null || json['content'] == '' ? null : json['content'],
       timestamp: DateTime.fromMillisecondsSinceEpoch((json['timestamp'] ?? 0) * 1000),
       models: List<String>.from(json['models'] ?? []),
       attachments: files.map((file) {
@@ -587,7 +622,7 @@ class OwuiChatMessage extends ChatMessage {
       'parentId': parentId,
       'childrenIds': childrenIds,
       'role': origin == MessageOrigin.user ? 'user' : 'assistant',
-      'content': text,
+      'content': text ?? "",
       'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
       'files': files.map((file) => file.toJson()).toList(),
       'sources': sources.map((source) => source.toJson()).toList(),
@@ -629,7 +664,7 @@ class OwuiMergedResponse {
   factory OwuiMergedResponse.fromJson(Map<String, dynamic> json) {
     return OwuiMergedResponse(
       status: json['status'],
-      content: utf8.decode((json['content']?.runes ?? []).toList()),
+      content: json['content'],
     );
   }
 
