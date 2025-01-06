@@ -764,16 +764,6 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
             ));
           }
         }
-        // Not like this...
-        // if (message.merged != null) {
-        //   out.add(OwuiChatMessage.llm(
-        //     parentId: message.id,
-        //     text: "## Merged:\n${message.merged?.content}",
-        //     model: message.model,
-        //     modelIdx: message.modelIdx,
-        //     modelName: message.modelName,
-        //   ));
-        // }
       } else {
         out.add(message);
       }
