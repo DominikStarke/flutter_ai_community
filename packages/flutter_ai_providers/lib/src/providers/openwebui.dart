@@ -587,6 +587,42 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Create a normal chat request in a chat that isn't new.
+  /// 
+  /// FIXME: Check if [createChat] and [_streamFromUserMessage] can be unified.
+  /// 
+  /// [userMessage] the message to append to the chat.
+  Future<void> _streamFromUserMessage (OwuiChatMessage userMessage) async {
+    assert(userMessage.origin == MessageOrigin.user);
+
+    _chat?.appendSibling(userMessage);
+    final List<OwuiChatMessage> outMessages = [];
+
+    for (final model in modelSelection) {
+      final message = OwuiChatMessage.llm(
+        parentId: userMessage.id,
+        model: model,
+        modelIdx: modelSelection.indexOf(model),
+        modelName: model
+      );
+
+      _chat?.appendSibling(message);
+      outMessages.add(message);
+    }
+    
+    notifyListeners();
+
+    for(final attachment in userMessage.attachments) {
+      userMessage.files.add(await _handleAttachment(attachment));
+    }
+      
+    for (final llmMessage in outMessages) {
+      _startCompletion(llmMessage);
+    }
+
+    notifyListeners();
+  }
+
   /// ******
   /// PUBLIC 
   /// ******
@@ -628,6 +664,13 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     await _saveChat();
   }
 
+  /// Create a new empty chat.
+  /// The new instance will be stored in openwebui backend.
+  /// Use this instead of setting [history] directly.
+  /// 
+  /// Warning! Switching back and forth between openwebui provider and other providers at runtime will save multiple copies of the chat.
+  /// 
+  /// [messages] the initial messages to add to the chat.
   Future<void> createChat (Iterable<ChatMessage> messages) async {
     await _configure();
 
@@ -713,37 +756,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
-  Future<void> _streamFromUserMessage (OwuiChatMessage userMessage) async {
-    assert(userMessage.origin == MessageOrigin.user);
-
-    _chat?.appendSibling(userMessage);
-    final List<OwuiChatMessage> outMessages = [];
-
-    for (final model in modelSelection) {
-      final message = OwuiChatMessage.llm(
-        parentId: userMessage.id,
-        model: model,
-        modelIdx: modelSelection.indexOf(model),
-        modelName: model
-      );
-
-      _chat?.appendSibling(message);
-      outMessages.add(message);
-    }
-    
-    notifyListeners();
-
-    for(final attachment in userMessage.attachments) {
-      userMessage.files.add(await _handleAttachment(attachment));
-    }
-      
-    for (final llmMessage in outMessages) {
-      _startCompletion(llmMessage);
-    }
-
-    notifyListeners();
-  }
-
+  /// Restore [_chat] from [chatId]
+  /// 
+  /// get chatIds from [chats] or [chatListNotifier].
   Future<OwuiChat> loadChat (String chatId) async {
     await _configure();
     final response = await http.get(
@@ -787,9 +802,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Notifies all listeners
   void clearChat () {
     _chat = null;
     notifyListeners();
+    chatListNotifier.value = chats;
+    modelListNotifier.value = _models?.models ?? [];
   }
 
   @override
@@ -835,7 +853,9 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       }
     } else {
       /// Init chat by setting history
-      throw("Setting history is not supported for OpenWebUIProvider. Use [loadChat] and [createChat] instead.");
+      /// This is async...
+      _chat = null;
+      createChat(newHistory);
     }
   }
 }

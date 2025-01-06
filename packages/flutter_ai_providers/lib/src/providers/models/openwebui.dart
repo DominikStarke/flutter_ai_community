@@ -3,6 +3,285 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_ai_toolkit/flutter_ai_toolkit.dart';
 import 'package:uuid/v4.dart';
 
+/// This is all honestly just fromJson and toJson
+/// If you encounter issues it's probably best to refer to the openwebui documentation
+/// http://localhost:3000/docs
+/// Remember you must have the dev eviroment running to access the documentation
+/// The only notable thing going on is how to get the tail from chat history and how to get files compatible to LlmProvider (See [OwuiChatMessage])
+/// 
+/// FIXME: Some of these interfaces are accessible from outside the package.
+/// FIXME: Others should be made package internal.
+
+class OwuiChat {
+  final String? id;
+  final String? userId;
+  String? title; // meh
+  // final List<OwuiChatMessage> messages; // use the messages getter instead...
+  final DateTime updatedAt;
+  final DateTime createdAt;
+  final String? shareId;
+  final bool archived;
+  final bool pinned;
+  final Map<String, dynamic> meta;
+  final String? folderId;
+  String historyCurrentId; // also meh
+  final Map<String, OwuiChatMessage> history;
+  final List<String>? models;
+  final List<OwuiFileAttachment> historyFiles;
+
+  /// Use [OwuiChat.messages] to get LlmProvider compatible messages using [historyCurrentId] as tail from [history]
+  /// Use [OwuiChat.tail] to get the message with [OwuiChat.historyCurrentId]
+  /// To append a child use [OwuiChat.appendSibling]. If the parent already has a child it is appended as sibling. Otherwise it's a normal child.
+  OwuiChat({
+    this.id,
+    this.userId,
+    this.title,
+    DateTime? updatedAt,
+    DateTime? createdAt,
+    this.shareId,
+    this.archived = false,
+    this.pinned = false,
+    this.meta = const {},
+    this.folderId,
+    Map<String, OwuiChatMessage>? history,
+    List<OwuiFileAttachment>? historyFiles,
+    this.historyCurrentId = "",
+    this.models,
+  }) : 
+    history = history ?? {}, // non-const
+    historyFiles = historyFiles ?? [], // non-const
+    createdAt = createdAt ?? DateTime.now(),
+    updatedAt = updatedAt ?? DateTime.now();
+
+  List<OwuiChatMessage> get messages {
+    List<OwuiChatMessage> orderedMessages = [];
+    OwuiChatMessage? currentMessage = history[historyCurrentId];
+
+    while (currentMessage != null) {
+      orderedMessages.add(currentMessage);
+      currentMessage = history[currentMessage.parentId];
+    }
+
+    return orderedMessages.reversed.toList();
+  }
+
+  OwuiChatMessage? get tail {
+    return messages.isNotEmpty ? messages.last : null;
+  }
+
+  void appendSibling (OwuiChatMessage message) {
+    history[message.id] = message;
+    final siblings = history[message.parentId]?.childrenIds;
+    if (siblings?.contains(message.id) != true) {
+      siblings?.add(message.id);
+    }
+    historyCurrentId = message.id;
+  }
+
+  factory OwuiChat.fromJson(Map<String, dynamic> json) {
+    return OwuiChat(
+      id: json['id'],
+      userId: json['user_id'],
+      title: json['title'], // Ensure proper decoding
+      // messages: chat, // use the messages getter instead...
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updated_at'] * 1000),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(json['created_at'] * 1000),
+      shareId: json['share_id'],
+      archived: json['archived'],
+      pinned: json['pinned'],
+      meta: json['meta'],
+      folderId: json['folder_id'],
+      historyFiles: (json['chat']?['files'] ?? [])
+        .map<OwuiFileAttachment>((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [],
+      historyCurrentId: json['chat']?['history']?['currentId'],
+      models: json['chat']?['models']?.cast<String>() ?? <String>[],
+      history: {
+        if(json['chat']?['history']?['messages'] is Map<String, dynamic>)
+          for(final entry in json['chat']['history']['messages'].entries)
+            entry.key: OwuiChatMessage.fromJson(entry.value)
+      }
+    );
+  }
+
+  Map<String, dynamic> toJson({List<String>? models}) {
+    return {
+      'chat' : {
+        'params': {},
+        'models': models ?? this.models ?? [],
+        'files': historyFiles.map((file) => file.toJson()).toList(),
+        'history': {
+          'currentId': historyCurrentId,
+          'messages': history.map((id, message) => MapEntry(id, message.toJson())),
+        },
+        'messages': messages.map((message) => message.toJson()).toList(),
+      }
+    };
+  }
+}
+
+class OwuiChatMessage extends ChatMessage {
+  final String id;
+  final String? parentId;
+  final List<String> childrenIds;
+  final DateTime timestamp;
+  final List<String>? models;
+  final String? model;
+  final int? modelIdx;
+  final String? modelName;
+  final List<OwuiFileAttachment> files;
+  final OwuiMergedResponse? merged;
+  final List<OwuiStatusHistoryEntry> statusHistory;
+  bool? done; // meh
+  final List<OwuiDocumentSource> sources;
+
+  OwuiChatMessage({
+    String? id,
+    this.parentId,
+    List<String>? childrenIds,
+    required super.origin,
+    super.text,
+    DateTime? timestamp,
+    Iterable<Attachment>? attachments,
+    this.models,
+    this.model,
+    this.modelIdx,
+    this.modelName,
+    List<OwuiFileAttachment>? files,
+    this.done,
+    this.merged,
+    List<OwuiStatusHistoryEntry>? statusHistory,
+    List<OwuiDocumentSource>? sources,
+  }): id = id ?? UuidV4().generate(),
+      timestamp = timestamp ?? DateTime.now(),
+      files = files ?? [], // Non const
+      childrenIds = childrenIds ?? [], // Non const
+      sources = sources ?? [], // Non const
+      statusHistory = statusHistory ?? [], // Non const
+      super(
+        attachments: attachments ?? [] // Non const
+      );
+
+  factory OwuiChatMessage.llm({
+    String? parentId,
+    String? model,
+    int? modelIdx,
+    String? modelName,
+    bool done = false,
+    OwuiMergedResponse? merged,
+    String? text,
+    String? id,
+    List<String>? childrenIds,
+  }) {
+    return OwuiChatMessage(
+      parentId: parentId,
+      origin: MessageOrigin.llm,
+      model: model,
+      modelIdx: modelIdx,
+      modelName: modelName,
+      done: done,
+      merged: merged,
+      text: text,
+      id: id,
+      childrenIds: childrenIds,
+    );
+  }
+
+  factory OwuiChatMessage.user(String text, {
+    required Iterable<Attachment> attachments,
+    List<String>? models,
+    List<OwuiFileAttachment>? files,
+    String? parentId
+  }) {
+    return OwuiChatMessage(
+      parentId: parentId,
+      attachments: attachments,
+      origin: MessageOrigin.user,
+      text: text,
+      files: files,
+      models: models,
+    );
+  }
+
+  factory OwuiChatMessage.fromJson(Map<String, dynamic>? json) {
+    if (json == null) {
+      return OwuiChatMessage(
+        origin: MessageOrigin.user,
+      );
+    }
+
+    final files = (json['files'] as List?)?.map((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [];
+
+    return OwuiChatMessage(
+      id: json['id'],
+      parentId: json['parentId'],
+      childrenIds: List<String>.from(json['childrenIds'] ?? []),
+      origin: json['role'] == 'user' ? MessageOrigin.user : MessageOrigin.llm,
+      text: json['content'] == null || json['content'] == '' ? null : json['content'],
+      timestamp: DateTime.fromMillisecondsSinceEpoch((json['timestamp'] ?? 0) * 1000),
+      models: List<String>.from(json['models'] ?? []),
+      attachments: files.map((file) {
+        if (file.type == 'image_url') {
+          return ImageFileAttachment(
+            name: file.name ?? "",
+            mimeType: file.contentType ?? 'image/png',
+            bytes: Uint8List.fromList([]),
+          );
+        } else {
+          return FileAttachment.fileOrImage(
+            name: file.name ?? "",
+            mimeType: file.contentType ?? 'application/octet-stream',
+            bytes: Uint8List.fromList([]),
+          );
+        }
+      }).toList(),
+      sources: (json['sources'] as List?)?.map((source) => OwuiDocumentSource.fromJson(source)).toList() ?? [],
+      statusHistory: (json['statusHistory'] as List?)?.map((entry) => OwuiStatusHistoryEntry.fromJson(entry)).toList() ?? [],
+      done: json['done'],
+      files: files,
+      model: json['model'],
+      modelIdx: json['modelIdx'],
+      modelName: json['modelName'],
+      merged: json['merged'] != null ? OwuiMergedResponse.fromJson(json['merged']) : null,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'parentId': parentId,
+      'childrenIds': childrenIds,
+      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
+      'content': text ?? "",
+      'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
+      'files': files.map((file) => file.toJson()).toList(),
+      'sources': sources.map((source) => source.toJson()).toList(),
+      'statusHistory': statusHistory?.map((entry) => entry.toJson()).toList(),
+      if(merged != null) 'merged': merged!.toJson(),
+      if(model != null) 'model': model,
+      if(models != null) 'models': models,
+      if(modelIdx != null) 'modelIdx': modelIdx,
+      if(modelName != null) 'modelName': modelName,
+      if(origin == MessageOrigin.llm) 'userContext': null,
+      if(origin == MessageOrigin.llm && done == true) 'done': done,
+    };
+  }
+
+  Map<String, dynamic> toCompletedJson() {
+    return {
+      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
+      'content': text,
+    };
+  }
+
+  Map<String, dynamic> toCompletionJson() {
+    return {
+      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
+      'content': text,
+    };
+  }
+}
+
 /// Internal open-webui json encoder / decoder
 /// Encode a request to the open-webui API.
 class OwuiCompletionRequest {
@@ -230,6 +509,7 @@ class OwuiFileAttachment {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiDocumentSource {
   final List<String>? document;
   final List<OwuiDocumentMetaData>? metadata;
@@ -263,6 +543,7 @@ class OwuiDocumentSource {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiDocumentMetaData {
   final String? source;
   final String? contentType;
@@ -311,6 +592,7 @@ class OwuiDocumentMetaData {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiDocumentSourceInfo {
   final String name;
 
@@ -331,6 +613,7 @@ class OwuiDocumentSourceInfo {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiChatList {
   final List<OwuiChatListEntry> chats;
 
@@ -347,6 +630,7 @@ class OwuiChatList {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiChatListEntry {
   final String id;
   final String title;
@@ -379,279 +663,7 @@ class OwuiChatListEntry {
   }
 }
 
-class OwuiChat {
-  final String? id;
-  final String? userId;
-  String? title; // meh
-  // final List<OwuiChatMessage> messages; // use the messages getter instead...
-  final DateTime updatedAt;
-  final DateTime createdAt;
-  final String? shareId;
-  final bool archived;
-  final bool pinned;
-  final Map<String, dynamic> meta;
-  final String? folderId;
-  String historyCurrentId; // also meh
-  final Map<String, OwuiChatMessage> history;
-  final List<String>? models;
-  final List<OwuiFileAttachment> historyFiles;
-
-  OwuiChat({
-    this.id,
-    this.userId,
-    this.title,
-    DateTime? updatedAt,
-    DateTime? createdAt,
-    this.shareId,
-    this.archived = false,
-    this.pinned = false,
-    this.meta = const {},
-    this.folderId,
-    Map<String, OwuiChatMessage>? history,
-    List<OwuiFileAttachment>? historyFiles,
-    this.historyCurrentId = "",
-    this.models,
-  }) : 
-    history = history ?? {}, // non-const
-    historyFiles = historyFiles ?? [], // non-const
-    createdAt = createdAt ?? DateTime.now(),
-    updatedAt = updatedAt ?? DateTime.now();
-
-  List<OwuiChatMessage> get messages {
-    List<OwuiChatMessage> orderedMessages = [];
-    OwuiChatMessage? currentMessage = history[historyCurrentId];
-
-    while (currentMessage != null) {
-      orderedMessages.add(currentMessage);
-      currentMessage = history[currentMessage.parentId];
-    }
-
-    return orderedMessages.reversed.toList();
-  }
-
-  OwuiChatMessage? get tail {
-    return messages.isNotEmpty ? messages.last : null;
-  }
-
-  // void appendMessage (OwuiChatMessage message) {
-  //   tail?.childrenIds.add(message.id);
-  //   history[message.id] = message;
-  //   historyCurrentId = message.id;
-  // }
-
-  void appendSibling (OwuiChatMessage message) {
-    history[message.id] = message;
-    final siblings = history[message.parentId]?.childrenIds;
-    if (siblings?.contains(message.id) != true) {
-      siblings?.add(message.id);
-    }
-    historyCurrentId = message.id;
-  }
-
-  factory OwuiChat.fromJson(Map<String, dynamic> json) {
-    return OwuiChat(
-      id: json['id'],
-      userId: json['user_id'],
-      title: json['title'], // Ensure proper decoding
-      // messages: chat, // use the messages getter instead...
-      updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updated_at'] * 1000),
-      createdAt: DateTime.fromMillisecondsSinceEpoch(json['created_at'] * 1000),
-      shareId: json['share_id'],
-      archived: json['archived'],
-      pinned: json['pinned'],
-      meta: json['meta'],
-      folderId: json['folder_id'],
-      historyFiles: (json['chat']?['files'] ?? [])
-        .map<OwuiFileAttachment>((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [],
-      historyCurrentId: json['chat']?['history']?['currentId'],
-      models: json['chat']?['models']?.cast<String>() ?? <String>[],
-      history: {
-        if(json['chat']?['history']?['messages'] is Map<String, dynamic>)
-          for(final entry in json['chat']['history']['messages'].entries)
-            entry.key: OwuiChatMessage.fromJson(entry.value)
-      }
-    );
-  }
-
-  Map<String, dynamic> toJson({List<String>? models}) {
-    return {
-      'chat' : {
-        'params': {},
-        'models': models ?? this.models ?? [],
-        'files': historyFiles.map((file) => file.toJson()).toList(),
-        'history': {
-          'currentId': historyCurrentId,
-          'messages': history.map((id, message) => MapEntry(id, message.toJson())),
-        },
-        'messages': messages.map((message) => message.toJson()).toList(),
-      }
-    };
-  }
-}
-
-class OwuiChatMessage extends ChatMessage {
-  final String id;
-  final String? parentId;
-  final List<String> childrenIds;
-  final DateTime timestamp;
-  final List<String>? models;
-  final String? model;
-  final int? modelIdx;
-  final String? modelName;
-  final List<OwuiFileAttachment> files;
-  final OwuiMergedResponse? merged;
-  final List<OwuiStatusHistoryEntry> statusHistory;
-  bool? done; // meh
-  final List<OwuiDocumentSource> sources;
-
-  OwuiChatMessage({
-    String? id,
-    this.parentId,
-    List<String>? childrenIds,
-    required super.origin,
-    super.text,
-    DateTime? timestamp,
-    Iterable<Attachment>? attachments,
-    this.models,
-    this.model,
-    this.modelIdx,
-    this.modelName,
-    List<OwuiFileAttachment>? files,
-    this.done,
-    this.merged,
-    List<OwuiStatusHistoryEntry>? statusHistory,
-    List<OwuiDocumentSource>? sources,
-  }): id = id ?? UuidV4().generate(),
-      timestamp = timestamp ?? DateTime.now(),
-      files = files ?? [], // Non const
-      childrenIds = childrenIds ?? [], // Non const
-      sources = sources ?? [], // Non const
-      statusHistory = statusHistory ?? [], // Non const
-      super(
-        attachments: attachments ?? [] // Non const
-      );
-
-  factory OwuiChatMessage.llm({
-    String? parentId,
-    String? model,
-    int? modelIdx,
-    String? modelName,
-    bool done = false,
-    OwuiMergedResponse? merged,
-    String? text,
-    String? id,
-    List<String>? childrenIds,
-  }) {
-    return OwuiChatMessage(
-      parentId: parentId,
-      origin: MessageOrigin.llm,
-      model: model,
-      modelIdx: modelIdx,
-      modelName: modelName,
-      done: done,
-      merged: merged,
-      text: text,
-      id: id,
-      childrenIds: childrenIds,
-    );
-  }
-
-  factory OwuiChatMessage.user(String text, {
-    required Iterable<Attachment> attachments,
-    List<String>? models,
-    List<OwuiFileAttachment>? files,
-    String? parentId
-  }) {
-    return OwuiChatMessage(
-      parentId: parentId,
-      attachments: attachments,
-      origin: MessageOrigin.user,
-      text: text,
-      files: files,
-      models: models,
-    );
-  }
-
-  factory OwuiChatMessage.fromJson(Map<String, dynamic>? json) {
-    if (json == null) {
-      return OwuiChatMessage(
-        origin: MessageOrigin.user,
-      );
-    }
-
-    final files = (json['files'] as List?)?.map((file) => OwuiFileAttachment.fromJson(file)).toList() ?? [];
-
-    return OwuiChatMessage(
-      id: json['id'],
-      parentId: json['parentId'],
-      childrenIds: List<String>.from(json['childrenIds'] ?? []),
-      origin: json['role'] == 'user' ? MessageOrigin.user : MessageOrigin.llm,
-      text: json['content'] == null || json['content'] == '' ? null : json['content'],
-      timestamp: DateTime.fromMillisecondsSinceEpoch((json['timestamp'] ?? 0) * 1000),
-      models: List<String>.from(json['models'] ?? []),
-      attachments: files.map((file) {
-        if (file.type == 'image_url') {
-          return ImageFileAttachment(
-            name: file.name ?? "",
-            mimeType: file.contentType ?? 'image/png',
-            bytes: Uint8List.fromList([]),
-          );
-        } else {
-          return FileAttachment.fileOrImage(
-            name: file.name ?? "",
-            mimeType: file.contentType ?? 'application/octet-stream',
-            bytes: Uint8List.fromList([]),
-          );
-        }
-      }).toList(),
-      sources: (json['sources'] as List?)?.map((source) => OwuiDocumentSource.fromJson(source)).toList() ?? [],
-      statusHistory: (json['statusHistory'] as List?)?.map((entry) => OwuiStatusHistoryEntry.fromJson(entry)).toList() ?? [],
-      done: json['done'],
-      files: files,
-      model: json['model'],
-      modelIdx: json['modelIdx'],
-      modelName: json['modelName'],
-      merged: json['merged'] != null ? OwuiMergedResponse.fromJson(json['merged']) : null,
-    );
-  }
-
-  @override
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'parentId': parentId,
-      'childrenIds': childrenIds,
-      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
-      'content': text ?? "",
-      'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
-      'files': files.map((file) => file.toJson()).toList(),
-      'sources': sources.map((source) => source.toJson()).toList(),
-      'statusHistory': statusHistory?.map((entry) => entry.toJson()).toList(),
-      if(merged != null) 'merged': merged!.toJson(),
-      if(model != null) 'model': model,
-      if(models != null) 'models': models,
-      if(modelIdx != null) 'modelIdx': modelIdx,
-      if(modelName != null) 'modelName': modelName,
-      if(origin == MessageOrigin.llm) 'userContext': null,
-      if(origin == MessageOrigin.llm && done == true) 'done': done,
-    };
-  }
-
-  Map<String, dynamic> toCompletedJson() {
-    return {
-      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
-      'content': text,
-    };
-  }
-
-  Map<String, dynamic> toCompletionJson() {
-    return {
-      'role': origin == MessageOrigin.user ? 'user' : 'assistant',
-      'content': text,
-    };
-  }
-}
-
+/// Internal open-webui json encoder / decoder
 class OwuiMergedResponse {
   final bool status;
   final String content;
@@ -676,6 +688,7 @@ class OwuiMergedResponse {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiLlmModel {
   final String id;
   final String name;
@@ -736,6 +749,7 @@ class OwuiLlmModel {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiLlmModelInfo {
   final String? id;
   final String? userId;
@@ -792,6 +806,7 @@ class OwuiLlmModelInfo {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiLlmModelParams {
   final String? system;
 
@@ -810,6 +825,7 @@ class OwuiLlmModelParams {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiLlmModelMeta {
   final String? profileImageUrl;
   final String? description;
@@ -850,6 +866,7 @@ class OwuiLlmModelMeta {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiLlmModelList {
   final List<OwuiLlmModel> models;
 
@@ -868,6 +885,7 @@ class OwuiLlmModelList {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiAccessControl {
   final OwuiAccessControlDetails? read;
   final OwuiAccessControlDetails? write;
@@ -889,6 +907,7 @@ class OwuiAccessControl {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiAccessControlDetails {
   final List<String>? groupIds;
   final List<String>? userIds;
@@ -910,6 +929,7 @@ class OwuiAccessControlDetails {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiStatusHistoryEntry {
   final String status;
   final String description;
@@ -960,6 +980,7 @@ class OwuiSettings {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiUiSettings {
   final List<String> models;
   final bool memory;
@@ -1000,6 +1021,7 @@ class OwuiUiSettings {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiTitleSettings {
   final String model;
   final String modelExternal;
@@ -1028,6 +1050,7 @@ class OwuiTitleSettings {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiNotificationsSettings {
   final String webhookUrl;
 
@@ -1048,6 +1071,7 @@ class OwuiNotificationsSettings {
   }
 }
 
+/// Internal open-webui json encoder / decoder
 class OwuiChatMessageChunk {
   final String chunk;
   final String messageId;
