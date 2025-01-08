@@ -131,6 +131,7 @@ class OwuiChatMessage extends ChatMessage {
   final List<OwuiFileAttachment> files;
   final OwuiMergedResponse? merged;
   final List<OwuiStatusHistoryEntry> statusHistory;
+  List<OwuiChatMessage> siblings = [];
   bool? done; // meh
   final List<OwuiDocumentSource> sources;
 
@@ -256,7 +257,7 @@ class OwuiChatMessage extends ChatMessage {
       'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
       'files': files.map((file) => file.toJson()).toList(),
       'sources': sources.map((source) => source.toJson()).toList(),
-      'statusHistory': statusHistory?.map((entry) => entry.toJson()).toList(),
+      'statusHistory': statusHistory.map((entry) => entry.toJson()).toList(),
       if(merged != null) 'merged': merged!.toJson(),
       if(model != null) 'model': model,
       if(models != null) 'models': models,

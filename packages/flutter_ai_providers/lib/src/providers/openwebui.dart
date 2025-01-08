@@ -12,7 +12,7 @@ import 'package:http_parser/http_parser.dart';
 
 export 'models/openwebui.dart';
 
-final bool __debug = true;
+const __debug = false;
 
 void __debugLog (String message, {String tag = "INFO"}) {
   if(!__debug) return;
@@ -817,21 +817,16 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       final siblingIds = _chat?.history[message.parentId]?.childrenIds ?? [message.id];
       final parentModels = _chat?.history[message.parentId]?.models ?? [];
 
+      final List<OwuiChatMessage> siblings = [];
       if(parentModels.length > 1) {
         // Add all the merged messages
         for(final siblingId in siblingIds) {
           final sibling = _chat?.history[siblingId];
-          if(sibling != null) {
-            out.add(OwuiChatMessage.llm(
-              parentId: message.id,
-              id: sibling.id,
-              text: "## ${sibling.model}:\n${sibling.text}",
-              model: sibling.model,
-              modelIdx: sibling.modelIdx,
-              modelName: sibling.modelName,
-            ));
+          if(sibling != null && sibling.id != message.id) {
+            siblings.add(sibling);
           }
         }
+        out.add(message..siblings = siblings);
       } else {
         out.add(message);
       }
@@ -841,6 +836,16 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   @override
   set history(Iterable<ChatMessage> newHistory) {
+    if(newHistory.isEmpty && (_chat?.history.isNotEmpty ?? false)) {
+      // history editing the first message.
+      _chat?.historyCurrentId = "";
+      return;
+    } else if(newHistory.isEmpty) {
+      // clear history
+      _chat = null;
+      return;
+    }
+
     final newTail = newHistory.last;
 
     if(newTail is OwuiChatMessage) {
