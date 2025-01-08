@@ -823,7 +823,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   @override
-  Iterable<ChatMessage> get history => _chat?.messages ?? [];
+  Iterable<ChatMessage> get history => _chat?.messages.cast<ChatMessage>() ?? []; // Downcast or "abort edit" will crash
 
   @override
   set history(Iterable<ChatMessage> newHistory) {
