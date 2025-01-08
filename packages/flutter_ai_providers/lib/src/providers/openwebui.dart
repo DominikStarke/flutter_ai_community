@@ -672,6 +672,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   /// 
   /// [messages] the initial messages to add to the chat.
   Future<void> createChat (Iterable<ChatMessage> messages) async {
+    _chat = null;
     await _configure();
 
     final List<Future> owuiFileUploads = [];
@@ -838,10 +839,14 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   set history(Iterable<ChatMessage> newHistory) {
     if(newHistory.isEmpty && (_chat?.history.isNotEmpty ?? false)) {
       // history editing the first message.
+      // Resetting [OwuiChat.historyCurrentId] like this sets the parent of the next (typically user) Message to null.
+      // This means it will be a sibling to the first message.
       _chat?.historyCurrentId = "";
       return;
     } else if(newHistory.isEmpty) {
       // clear history
+      // Throw the chat away.
+      // The next call to [sendMessageStream] will create a new chat.
       _chat = null;
       return;
     }
@@ -858,8 +863,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
       }
     } else {
       /// Init chat by setting history
-      /// This is async...
-      _chat = null;
+      /// [createChat] will call notifyListeners multiple times during chat creation.
       createChat(newHistory);
     }
   }
