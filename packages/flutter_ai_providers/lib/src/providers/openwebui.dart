@@ -73,6 +73,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
 
   /// FIXME: Model handling is way too complex and buggy.
   OwuiLlmModelList? _models;
+  
   /// FIXME: Model handling is way too complex and buggy.
   OwuiLlmModelList? _modelSelection;
 
@@ -783,6 +784,12 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
     }
   }
 
+  /// Delete a chat from the server.  
+  /// If no [chatId] is provided the active instance of chat is deleted.  
+  /// Notifies its listeners.  
+  /// Reloads the chat list.  
+  /// 
+  /// [chatId] optional - the id of the chat to delete.
   Future<void> deleteChat ([String? chatId]) async {
     final response = await http.delete(
       Uri.parse('$_host/v1/chats/${chatId ?? _chat?.id}'),
@@ -804,6 +811,10 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   /// Notifies all listeners
+  /// Throw away the _chat instance, without deleting it on the server.  
+  /// 
+  /// The next call to [sendMessageStream] will create a new chat.  
+  /// Notifies all listeners.
   void clearChat () {
     _chat = null;
     notifyListeners();
@@ -812,28 +823,7 @@ class OpenWebUIProvider extends LlmProvider with ChangeNotifier {
   }
 
   @override
-  Iterable<ChatMessage> get history {
-    final List<ChatMessage> out = [];
-    for(final message in (_chat?.messages ?? <OwuiChatMessage>[])) {
-      final siblingIds = _chat?.history[message.parentId]?.childrenIds ?? [message.id];
-      final parentModels = _chat?.history[message.parentId]?.models ?? [];
-
-      final List<OwuiChatMessage> siblings = [];
-      if(parentModels.length > 1) {
-        // Add all the merged messages
-        for(final siblingId in siblingIds) {
-          final sibling = _chat?.history[siblingId];
-          if(sibling != null && sibling.id != message.id) {
-            siblings.add(sibling);
-          }
-        }
-        out.add(message..siblings = siblings);
-      } else {
-        out.add(message);
-      }
-    }
-    return out;
-  }
+  Iterable<ChatMessage> get history => _chat?.messages ?? [];
 
   @override
   set history(Iterable<ChatMessage> newHistory) {

@@ -58,6 +58,12 @@ class OwuiChat {
     OwuiChatMessage? currentMessage = history[historyCurrentId];
 
     while (currentMessage != null) {
+      List<String> siblingIds = history[currentMessage.parentId]?.childrenIds ?? [];
+      currentMessage.siblings = [
+        for (final id in siblingIds)
+          if(id != currentMessage.id) history[id]!
+      ];
+
       orderedMessages.add(currentMessage);
       currentMessage = history[currentMessage.parentId];
     }
